@@ -30,8 +30,14 @@ async def login(request: Request):
 async def auth_callback(request: Request):
     try:
         token = await oauth.keycloak.authorize_access_token(request)
-        request.session['user'] = token.get('userinfo')
-        return RedirectResponse(url='/')
+
+        # TEMP: inspect access token
+        access_token = token["access_token"]
+        print("ACCESS TOKEN:\n", access_token)
+
+        request.session["user"] = token.get("userinfo")
+        return RedirectResponse(url="/")
+
     except Exception as e:
         return HTMLResponse(f"Auth failed: {e}", status_code=400)
 
