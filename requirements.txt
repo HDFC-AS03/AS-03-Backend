@@ -6,3 +6,6 @@ httpx
 python-dotenv
 pydantic-settings
 itsdangerous
+python-jose[cryptography]
+cachetools
+pytest
