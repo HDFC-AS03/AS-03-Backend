@@ -1,4 +1,5 @@
-from typing import Dict, Any
+# app/auth/jwt_utils.py
+from typing import Dict, Any, Optional
 import logging
 import httpx
 from jose import jwt, JWTError
@@ -27,19 +28,38 @@ async def _fetch_jwks() -> Dict[str, Any]:
         return jwks
 
 
-async def validate_bearer_token(token: str) -> Dict[str, Any]:
+async def validate_bearer_token(
+    token: str,
+    audience: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Validate RS256 JWT using Keycloak JWKS.
+    Supports optional audience validation.
+    """
     try:
         jwks = await _fetch_jwks()
+
+        options = {
+            "verify_aud": bool(audience),
+            "verify_exp": True,
+            "verify_iss": True,
+        }
 
         claims = jwt.decode(
             token,
             jwks,
             algorithms=["RS256"],
+            audience=audience,
             issuer=f"{settings.KEYCLOAK_SERVER_URL}/realms/{settings.KEYCLOAK_REALM}",
-            options={"verify_aud": False},
+            options=options,
         )
+
         return claims
 
     except JWTError as e:
         logger.warning(f"JWT validation error: {e}")
-        raise ValueError("Invalid token")
+        raise ValueError("Invalid token") from e
+
+    except Exception as e:
+        logger.exception("Unexpected token validation error")
+        raise ValueError("Token validation failed") from e

@@ -3,8 +3,11 @@ from fastapi.responses import RedirectResponse
 from app.auth.oauth import oauth
 from app.auth.dependencies import require_auth, require_role
 from app.core.config import settings
+from app.core.response_wrapper import wrap_response
 from jose import jwt
 import json
+from fastapi import Body
+import httpx
 
 router = APIRouter()
 
@@ -23,25 +26,30 @@ async def auth_callback(request: Request):
     token = await oauth.keycloak.authorize_access_token(request)
 
     access_token = token["access_token"]
+    refresh_token = token.get("refresh_token")
+
     decoded = jwt.get_unverified_claims(access_token)
 
-    print("\n========== DECODED ACCESS TOKEN ==========")
-    print(json.dumps(decoded, indent=4))
-    print("==========================================\n")
-
-    # Extract roles properly
     roles = decoded.get("realm_access", {}).get("roles", [])
 
-    # Build proper session user object
+    # Store user
     request.session["user"] = {
         "sub": decoded.get("sub"),
         "email": decoded.get("email"),
         "preferred_username": decoded.get("preferred_username"),
         "name": decoded.get("name"),
         "roles": roles,
+        "exp": decoded.get("exp"),
+    }
+
+    # Store tokens securely in session
+    request.session["tokens"] = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
     }
 
     return RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard")
+
 
 
 @router.get("/logout")
@@ -61,13 +69,20 @@ async def logout(request: Request):
 
 @router.get("/me")
 async def get_current_user(user: dict = Depends(require_auth)):
-    return {
+    user_data = {
         "sub": user.get("sub"),
         "email": user.get("email"),
         "preferred_username": user.get("preferred_username"),
         "name": user.get("name"),
         "roles": user.get("roles", []),
+        "exp": user.get("exp"),
     }
+
+    return wrap_response(
+        user_data,
+        message="User information retrieved successfully",
+        ttl=300,
+    )
 
 
 @router.get("/admin")
@@ -78,3 +93,53 @@ async def admin_only(user: dict = Depends(require_role("admin"))):
 @router.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+
+@router.post("/refresh")
+async def refresh_token(request: Request):
+    tokens = request.session.get("tokens")
+
+    if not tokens or not tokens.get("refresh_token"):
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="No refresh token")
+
+    refresh_token_value = tokens.get("refresh_token")
+
+    token_url = (
+        f"{settings.KEYCLOAK_SERVER_URL}/realms/"
+        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
+    )
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            token_url,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": settings.KEYCLOAK_CLIENT_ID,
+                "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+                "refresh_token": refresh_token_value,
+            },
+        )
+
+    if response.status_code != 200:
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="Refresh expired")
+
+    new_tokens = response.json()
+
+    # Update session tokens
+    request.session["tokens"] = {
+        "access_token": new_tokens.get("access_token"),
+        "refresh_token": new_tokens.get("refresh_token"),
+    }
+
+    # Update expiry
+    decoded = jwt.get_unverified_claims(new_tokens.get("access_token"))
+
+    user = request.session.get("user", {})
+    user["exp"] = decoded.get("exp")
+    request.session["user"] = user
+
+    return {"message": "refreshed"}
+

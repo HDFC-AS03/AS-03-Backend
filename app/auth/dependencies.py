@@ -42,13 +42,40 @@ async def require_auth(
 
 
 def require_role(role: str):
+    """
+    Require a specific role.
+    Supports:
+    - Realm roles
+    - Client roles (resource_access)
+    """
+
     def checker(user: dict = Depends(require_auth)):
-        if role not in user.get("roles", []):
+
+        # 1️⃣ Realm roles (already stored in session or bearer)
+        realm_roles = user.get("roles", []) or []
+
+        # 2️⃣ Client roles (if bearer token with claims)
+        client_roles = []
+        claims = user.get("claims") or {}
+
+        resource_access = claims.get("resource_access", {})
+        if isinstance(resource_access, dict):
+            for client_data in resource_access.values():
+                client_roles.extend(client_data.get("roles", []))
+
+        # 3️⃣ Combine roles
+        all_roles = set(realm_roles + client_roles)
+
+        if role not in all_roles:
             logger.warning(
                 f"Unauthorized access by {user.get('preferred_username')} "
-                f"for role {role}"
+                f"for role '{role}'. User roles: {list(all_roles)}"
             )
-            raise HTTPException(status_code=403, detail="Forbidden")
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: '{role}' role required"
+            )
+
         return user
 
     return checker
