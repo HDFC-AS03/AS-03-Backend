@@ -1,11 +1,7 @@
 fastapi
-uvicorn
-gunicorn
-authlib
+uvicorn[standard]
 httpx
-python-dotenv
+authlib
+python-jose[cryptography]
 pydantic-settings
 itsdangerous
-python-jose[cryptography]
-cachetools
-pytest
