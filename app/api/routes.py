@@ -5,6 +5,7 @@ from app.auth.dependencies import require_auth, require_role
 from app.core.config import settings
 from app.core.response_wrapper import wrap_response
 from jose import jwt
+from app.services import app_admin_service
 # import json
 # from fastapi import Body
 import httpx
@@ -23,6 +24,10 @@ async def login(request: Request):
 
 @router.get("/callback", name="auth_callback")
 async def auth_callback(request: Request):
+    print("----- CALLBACK DEBUG -----")
+    print("SESSION:", dict(request.session))
+    print("QUERY STATE:", request.query_params.get("state"))
+    print("--------------------------")
     token = await oauth.keycloak.authorize_access_token(request)
 
     access_token = token["access_token"]
@@ -142,4 +147,47 @@ async def refresh_token(request: Request):
     request.session["user"] = user
 
     return {"message": "refreshed"}
-
+#-------------------
+#Add bulk users
+#------------------
+@router.post("/admin/bulk-users")
+async def bulk_users(
+    payload: list[dict],
+    user: dict = Depends(require_role("admin"))
+):
+    result = await app_admin_service.bulk_create_users(payload)
+    return wrap_response(result, message="Bulk user operation completed")
+#-----------------
+# DELETE USER ROUTE
+# ----------------
+@router.delete("/admin/users/{user_id}")
+async def remove_user(
+    user_id: str,
+    user: dict = Depends(require_role("admin"))
+):
+    await app_admin_service.delete_user(user_id)
+    return wrap_response({}, message="User deleted successfully")
+#--------------
+#View Users (By roles) 
+#---------------
+@router.get("/admin/users")
+async def view_users(
+    user: dict = Depends(require_role("admin"))
+):
+    users = await app_admin_service.get_users_by_role("user")
+    return wrap_response(users, message="Users fetched successfully")
+#-------------------
+#ASSIGN ROLE
+#---------------------
+@router.post("/admin/users/{user_id}/roles")
+async def assign_role_api(
+    user_id: str,
+    role_name: str,
+    user: dict = Depends(require_role("admin"))
+):
+    await app_admin_service.assign_role(
+        user_id,
+        role_name,
+        "fast-api-client"
+    )
+    return wrap_response({}, message="Role assigned successfully")
