@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Request, Depends, HTTPException, Response, Header
 from fastapi.responses import RedirectResponse
-from app.auth.oauth import oauth
 from app.auth.dependencies import require_auth, require_role
 from app.core.config import settings
 from app.core.response_wrapper import wrap_response
+from urllib.parse import urlencode
 import httpx
 import logging
 import os
@@ -14,7 +14,9 @@ router = APIRouter()
 # Cookie configuration
 COOKIE_NAME = "refresh_token"
 CSRF_COOKIE_NAME = "csrf_token"
+OAUTH_STATE_COOKIE = "oauth_state"  # For PKCE/state during OAuth flow
 COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
+OAUTH_STATE_MAX_AGE = 60 * 5  # 5 minutes for OAuth state
 IS_PRODUCTION = os.getenv("ENV", "dev") == "production"
 
 # Development vs Production token handling:
@@ -58,20 +60,87 @@ async def validate_csrf(
 async def root():
     return {"message": "Auth Service Running"}
 
+# External Keycloak URL for browser redirects
+KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:8080")
+
+
 @router.get("/login")
 async def login(request: Request):
-    redirect_uri = request.url_for("auth_callback")
-    return await oauth.keycloak.authorize_redirect(request, redirect_uri)
+    """Initiate OAuth flow - stateless using cookie for state storage."""
+    # Generate cryptographic state for CSRF protection
+    state = secrets.token_urlsafe(32)
+    
+    # Build callback URL
+    redirect_uri = str(request.url_for("auth_callback"))
+    
+    # Build Keycloak authorization URL
+    auth_params = urlencode({
+        "client_id": settings.KEYCLOAK_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+    })
+    auth_url = f"{KEYCLOAK_EXTERNAL_URL}/realms/{settings.KEYCLOAK_REALM}/protocol/openid-connect/auth?{auth_params}"
+    
+    # Set state in cookie and redirect
+    response = RedirectResponse(url=auth_url)
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE,
+        value=state,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        max_age=OAUTH_STATE_MAX_AGE,
+        path="/",
+    )
+    return response
 
 
 @router.get("/callback", name="auth_callback")
 async def auth_callback(request: Request):
-    token = await oauth.keycloak.authorize_access_token(request)
-
-    access_token = token["access_token"]
-    refresh_token = token.get("refresh_token")
-
-    from urllib.parse import urlencode
+    """OAuth callback - validates state from cookie, exchanges code for tokens."""
+    # Get code and state from query params
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    error = request.query_params.get("error")
+    
+    if error:
+        raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
+    
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing code or state")
+    
+    # Validate state from cookie
+    stored_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    if not stored_state:
+        raise HTTPException(status_code=400, detail="Missing OAuth state cookie")
+    if not secrets.compare_digest(stored_state, state):
+        raise HTTPException(status_code=400, detail="Invalid state - possible CSRF attack")
+    
+    # Exchange code for tokens
+    redirect_uri = str(request.url_for("auth_callback"))
+    token_url = f"{settings.KEYCLOAK_SERVER_URL}/realms/{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
+    
+    async with httpx.AsyncClient(timeout=10) as client:
+        token_response = await client.post(
+            token_url,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": settings.KEYCLOAK_CLIENT_ID,
+                "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+        )
+    
+    if token_response.status_code != 200:
+        logging.error(f"Token exchange failed: {token_response.status_code} {token_response.text}")
+        raise HTTPException(status_code=401, detail="Token exchange failed")
+    
+    tokens = token_response.json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens.get("refresh_token")
     
     if USE_COOKIE_REFRESH:
         # Production: Only access_token in URL, refresh token in httpOnly cookie
@@ -108,6 +177,8 @@ async def auth_callback(request: Request):
         })
         response = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard#{token_params}")
     
+    # Clear the oauth_state cookie
+    response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/")
     return response
 
 
