@@ -13,6 +13,8 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
 
   keycloak:
     image: quay.io/keycloak/keycloak:24.0.1
@@ -31,15 +33,57 @@ services:
       KC_DB_PASSWORD: keycloak
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
-
-    volumes:
-      - ../themes/my-company-my-company-theme
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: "8080"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
 
     ports:
       - "8080:8080"
 
     depends_on:
       - postgres
+    networks:
+      - app-network
+
+  backend:
+    build: ..
+    container_name: backend
+    ports:
+      - "8000:8000"
+    environment:
+      - KEYCLOAK_SERVER_URL=http://keycloak:8080
+      - KEYCLOAK_EXTERNAL_URL=http://localhost:8080
+      - KEYCLOAK_REFRESH_URL=http://host.docker.internal:8080
+      - KEYCLOAK_CLIENT_ID=Front-End-Client
+      - KEYCLOAK_CLIENT_SECRET=ilIegQRFsQKvjSMvjxXByukL1XSlKtVH
+      - KEYCLOAK_REALM=auth-realm
+      - KEYCLOAK_ADMIN_CLIENT_ID=fast-api-admin-client
+      - KEYCLOAK_ADMIN_CLIENT_SECRET=qiFQRXD8AsBneFZZSM0ZT82uxQB4chLI
+      - SESSION_SECRET_KEY=generate_a_long_secure_random_string_here
+      - FRONTEND_URL=http://localhost:5173
+      - ENV=dev
+    depends_on:
+      - keycloak
+    networks:
+      - app-network
+
+  gateway:
+    build: ../gateway
+    container_name: api-gateway
+    ports:
+      - "80:80"
+    volumes:
+      - ../gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
+      - ../gateway/lua:/usr/local/openresty/nginx/lua
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
   postgres_data:

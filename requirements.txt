@@ -1,7 +1,9 @@
 fastapi
 uvicorn[standard]
+gunicorn
 httpx
 authlib
 python-jose[cryptography]
 pydantic-settings
 itsdangerous
+cachetools

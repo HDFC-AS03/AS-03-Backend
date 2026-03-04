@@ -1,8 +1,9 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env")
     ENV: str = "dev"
     SESSION_SECRET_KEY: str | None = None
 
@@ -29,9 +30,6 @@ class Settings(BaseSettings):
         if env == "prod" and not v:
             raise ValueError("SESSION_SECRET_KEY must be set in production")
         return v or "dev-secret-change-me"
-
-    class Config:
-        env_file = ".env"
 
 
 settings = Settings()

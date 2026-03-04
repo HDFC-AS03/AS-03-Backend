@@ -35,6 +35,7 @@ async def validate_bearer_token(
     """
     Validate RS256 JWT using Keycloak JWKS.
     Supports optional audience validation.
+    Accepts tokens from both internal (keycloak:8080) and external (localhost:8080) issuers.
     """
     try:
         jwks = await _fetch_jwks()
@@ -42,17 +43,27 @@ async def validate_bearer_token(
         options = {
             "verify_aud": bool(audience),
             "verify_exp": True,
-            "verify_iss": True,
+            "verify_iss": False,  # We'll verify manually to allow multiple issuers
         }
 
+        # First decode without issuer validation
         claims = jwt.decode(
             token,
             jwks,
             algorithms=["RS256"],
             audience=audience,
-            issuer=f"{settings.KEYCLOAK_SERVER_URL}/realms/{settings.KEYCLOAK_REALM}",
             options=options,
         )
+        
+        # Manually verify issuer (accept both internal and external URLs)
+        valid_issuers = [
+            f"{settings.KEYCLOAK_SERVER_URL}/realms/{settings.KEYCLOAK_REALM}",
+            f"http://localhost:8080/realms/{settings.KEYCLOAK_REALM}",
+        ]
+        token_issuer = claims.get("iss")
+        if token_issuer not in valid_issuers:
+            logger.warning(f"Invalid issuer: {token_issuer}")
+            raise ValueError("Invalid token issuer")
 
         return claims
 
