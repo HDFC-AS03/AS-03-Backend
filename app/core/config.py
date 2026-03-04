@@ -5,9 +5,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     ENV: str = "dev"
 
-    # Required for Authlib OAuth state storage during login flow
-    SESSION_SECRET_KEY: str = "dev-secret-change-in-production"
-
     KEYCLOAK_CLIENT_ID: str
     KEYCLOAK_CLIENT_SECRET: str
     KEYCLOAK_REALM: str
