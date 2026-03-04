@@ -5,11 +5,8 @@ import logging
 logger = logging.getLogger("auth")
 
 
-def get_session_user(request: Request):
-    return request.session.get("user")
-
-
 async def get_bearer_user(request: Request):
+    """Extract and validate JWT from Authorization header."""
     auth = request.headers.get("Authorization")
 
     if not auth or not auth.lower().startswith("bearer "):
@@ -25,17 +22,15 @@ async def get_bearer_user(request: Request):
             "preferred_username": claims.get("preferred_username"),
             "name": claims.get("name"),
             "roles": claims.get("realm_access", {}).get("roles", []),
+            "exp": claims.get("exp"),
             "claims": claims,
         }
     except ValueError:
         return None
 
 
-async def require_auth(
-    session_user: dict = Depends(get_session_user),
-    bearer_user: dict = Depends(get_bearer_user),
-):
-    user = session_user or bearer_user
+async def require_auth(user: dict = Depends(get_bearer_user)):
+    """Require valid JWT bearer token."""
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user
@@ -51,7 +46,7 @@ def require_role(role: str):
 
     def checker(user: dict = Depends(require_auth)):
 
-        # 1️⃣ Realm roles (already stored in session or bearer)
+        # 1️⃣ Realm roles
         realm_roles = user.get("roles", []) or []
 
         # 2️⃣ Client roles (if bearer token with claims)

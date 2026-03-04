@@ -1,17 +1,19 @@
-from fastapi import APIRouter, Request, Depends, HTTPException, Response
+from fastapi import APIRouter, Request, Depends, HTTPException, Response, Header
 from fastapi.responses import RedirectResponse
 from app.auth.oauth import oauth
 from app.auth.dependencies import require_auth, require_role
 from app.core.config import settings
 from app.core.response_wrapper import wrap_response
-from jose import jwt
 import httpx
+import logging
 import os
+import secrets
 
 router = APIRouter()
 
 # Cookie configuration
 COOKIE_NAME = "refresh_token"
+CSRF_COOKIE_NAME = "csrf_token"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 IS_PRODUCTION = os.getenv("ENV", "dev") == "production"
 
@@ -19,6 +21,38 @@ IS_PRODUCTION = os.getenv("ENV", "dev") == "production"
 # - DEV: Both tokens in URL hash (stored in sessionStorage) - XSS risk but works cross-port
 # - PROD: Access token in URL, refresh token in httpOnly cookie (requires same-origin)
 USE_COOKIE_REFRESH = IS_PRODUCTION
+
+
+def generate_csrf_token() -> str:
+    """Generate a cryptographically secure CSRF token."""
+    return secrets.token_urlsafe(32)
+
+
+async def validate_csrf(
+    request: Request,
+    x_csrf_token: str | None = Header(None, alias="X-CSRF-Token"),
+):
+    """
+    CSRF validation dependency for state-changing endpoints.
+    Validates that X-CSRF-Token header matches csrf_token cookie.
+    Only enforced in production mode with httpOnly cookies.
+    """
+    if not USE_COOKIE_REFRESH:
+        # Skip CSRF in dev mode (no httpOnly cookies)
+        return True
+    
+    csrf_cookie = request.cookies.get(CSRF_COOKIE_NAME)
+    
+    if not csrf_cookie:
+        raise HTTPException(status_code=403, detail="Missing CSRF cookie")
+    
+    if not x_csrf_token:
+        raise HTTPException(status_code=403, detail="Missing X-CSRF-Token header")
+    
+    if not secrets.compare_digest(csrf_cookie, x_csrf_token):
+        raise HTTPException(status_code=403, detail="CSRF token mismatch")
+    
+    return True
 
 @router.get("/")
 async def root():
@@ -54,6 +88,18 @@ async def auth_callback(request: Request):
                 max_age=COOKIE_MAX_AGE,
                 path="/",
             )
+        
+        # Set CSRF token cookie (readable by JS for double-submit pattern)
+        csrf_token = generate_csrf_token()
+        response.set_cookie(
+            key=CSRF_COOKIE_NAME,
+            value=csrf_token,
+            httponly=False,  # Must be readable by JavaScript
+            secure=True,
+            samesite="lax",
+            max_age=COOKIE_MAX_AGE,
+            path="/",
+        )
     else:
         # Development: Both tokens in URL (frontend stores in sessionStorage)
         token_params = urlencode({
@@ -71,9 +117,8 @@ KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:808
 KEYCLOAK_REFRESH_URL = os.getenv("KEYCLOAK_REFRESH_URL", "http://host.docker.internal:8080")
 
 @router.get("/logout")
-async def logout(request: Request):
-    request.session.clear()
-
+async def logout():
+    """Logout: clear cookies and redirect to Keycloak logout."""
     logout_url = (
         f"{KEYCLOAK_EXTERNAL_URL}/realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/logout"
@@ -89,6 +134,15 @@ async def logout(request: Request):
         key=COOKIE_NAME,
         path="/",
         httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+    )
+    
+    # Clear the CSRF token cookie
+    response.delete_cookie(
+        key=CSRF_COOKIE_NAME,
+        path="/",
+        httponly=False,
         secure=IS_PRODUCTION,
         samesite="lax",
     )
@@ -126,14 +180,17 @@ async def health():
 
 
 @router.post("/refresh")
-async def refresh_token(request: Request, response: Response):
+async def refresh_token(
+    request: Request,
+    response: Response,
+    _csrf: bool = Depends(validate_csrf),
+):
     """
     Refresh access token.
-    - Production: reads refresh_token from httpOnly cookie
+    - Production: reads refresh_token from httpOnly cookie, requires CSRF token
     - Development: reads refresh_token from request body
     Returns new access_token (and refresh_token in dev mode).
     """
-    import logging
     refresh_token_value = None
     
     if USE_COOKIE_REFRESH:
@@ -146,9 +203,7 @@ async def refresh_token(request: Request, response: Response):
         try:
             body = await request.json()
             refresh_token_value = body.get("refresh_token")
-            logging.info(f"Refresh token received (first 50 chars): {refresh_token_value[:50] if refresh_token_value else 'None'}...")
-        except Exception as e:
-            logging.error(f"Failed to parse refresh body: {e}")
+        except Exception:
             pass
         if not refresh_token_value:
             raise HTTPException(status_code=400, detail="refresh_token required in body")
@@ -172,8 +227,7 @@ async def refresh_token(request: Request, response: Response):
         )
 
     if keycloak_response.status_code != 200:
-        import logging
-        logging.error(f"Keycloak refresh failed: {keycloak_response.status_code} - {keycloak_response.text}")
+        logging.warning(f"Refresh failed: {keycloak_response.status_code}")
         if USE_COOKIE_REFRESH:
             response.delete_cookie(key=COOKIE_NAME, path="/")
         raise HTTPException(status_code=401, detail="Refresh token expired or invalid")
@@ -193,7 +247,20 @@ async def refresh_token(request: Request, response: Response):
                 max_age=COOKIE_MAX_AGE,
                 path="/",
             )
-        return {"access_token": new_tokens.get("access_token")}
+        
+        # Rotate CSRF token on successful refresh
+        new_csrf = generate_csrf_token()
+        response.set_cookie(
+            key=CSRF_COOKIE_NAME,
+            value=new_csrf,
+            httponly=False,
+            secure=True,
+            samesite="lax",
+            max_age=COOKIE_MAX_AGE,
+            path="/",
+        )
+        
+        return {"access_token": new_tokens.get("access_token"), "csrf_token": new_csrf}
     else:
         # Development: Return both tokens
         return {

@@ -60,7 +60,7 @@ services:
       - KEYCLOAK_REALM=auth-realm
       - KEYCLOAK_ADMIN_CLIENT_ID=fast-api-admin-client
       - KEYCLOAK_ADMIN_CLIENT_SECRET=qiFQRXD8AsBneFZZSM0ZT82uxQB4chLI
-      - SESSION_SECRET_KEY=generate_a_long_secure_random_string_here
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY:-generate_a_secure_random_string}
       - FRONTEND_URL=http://localhost:5173
       - ENV=dev
     depends_on:

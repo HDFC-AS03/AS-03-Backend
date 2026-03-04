@@ -1,10 +1,17 @@
 # Virtual environment
 venv/
 .env
+
 # -------------------------
 # Editor / OS
 # -------------------------
 .vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
 # -------------------------
 # Python
 # -------------------------
@@ -12,3 +19,19 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# -------------------------
+# Test Coverage
+# -------------------------
+htmlcov/
+.coverage
+coverage.xml
+
+# -------------------------
+# Logs
+# -------------------------
+*.log
