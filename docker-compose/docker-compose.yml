@@ -55,12 +55,11 @@ services:
       - KEYCLOAK_SERVER_URL=http://keycloak:8080
       - KEYCLOAK_EXTERNAL_URL=http://localhost:8080
       - KEYCLOAK_REFRESH_URL=http://host.docker.internal:8080
-      - KEYCLOAK_CLIENT_ID=Front-End-Client
-      - KEYCLOAK_CLIENT_SECRET=ilIegQRFsQKvjSMvjxXByukL1XSlKtVH
-      - KEYCLOAK_REALM=auth-realm
-      - KEYCLOAK_ADMIN_CLIENT_ID=fast-api-admin-client
-      - KEYCLOAK_ADMIN_CLIENT_SECRET=qiFQRXD8AsBneFZZSM0ZT82uxQB4chLI
-      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY:-generate_a_secure_random_string}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-Front-End-Client}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:?Set KEYCLOAK_CLIENT_SECRET in .env}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-auth-realm}
+      - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID:-}
+      - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
       - FRONTEND_URL=http://localhost:5173
       - ENV=dev
     depends_on:
