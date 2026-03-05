@@ -6,29 +6,51 @@ from app.core.config import settings
 from app.core.response_wrapper import wrap_response
 from jose import jwt
 from app.services import app_admin_service
-# import json
-# from fastapi import Body
 import httpx
 
 router = APIRouter()
+
 
 @router.get("/")
 async def root():
     return {"message": "Auth Service Running"}
 
+
+# -------------------------
+# LOGIN
+# -------------------------
 @router.get("/login")
 async def login(request: Request):
+
+    if request.session.get("user"):
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard")
+
     redirect_uri = request.url_for("auth_callback")
-    return await oauth.keycloak.authorize_redirect(request, redirect_uri)
+
+    try:
+        return await oauth.keycloak.authorize_redirect(request, redirect_uri)
+    except Exception:
+        request.session.clear()
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to initiate login. Please retry."
+        )
 
 
+# -------------------------
+# CALLBACK
+# -------------------------
 @router.get("/callback", name="auth_callback")
 async def auth_callback(request: Request):
-    print("----- CALLBACK DEBUG -----")
-    print("SESSION:", dict(request.session))
-    print("QUERY STATE:", request.query_params.get("state"))
-    print("--------------------------")
-    token = await oauth.keycloak.authorize_access_token(request)
+
+    try:
+        token = await oauth.keycloak.authorize_access_token(request)
+
+    except Exception:
+        request.session.clear()
+        return RedirectResponse(
+            url=f"{settings.FRONTEND_URL}/?error=auth_failed"
+        )
 
     access_token = token["access_token"]
     refresh_token = token.get("refresh_token")
@@ -37,7 +59,6 @@ async def auth_callback(request: Request):
 
     roles = decoded.get("realm_access", {}).get("roles", [])
 
-    # Store user
     request.session["user"] = {
         "sub": decoded.get("sub"),
         "email": decoded.get("email"),
@@ -47,7 +68,6 @@ async def auth_callback(request: Request):
         "exp": decoded.get("exp"),
     }
 
-    # Store tokens securely in session
     request.session["tokens"] = {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -56,9 +76,12 @@ async def auth_callback(request: Request):
     return RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard")
 
 
-
+# -------------------------
+# LOGOUT
+# -------------------------
 @router.get("/logout")
 async def logout(request: Request):
+
     request.session.clear()
 
     logout_url = (
@@ -72,8 +95,12 @@ async def logout(request: Request):
     )
 
 
+# -------------------------
+# CURRENT USER
+# -------------------------
 @router.get("/me")
 async def get_current_user(user: dict = Depends(require_auth)):
+
     user_data = {
         "sub": user.get("sub"),
         "email": user.get("email"),
@@ -90,19 +117,28 @@ async def get_current_user(user: dict = Depends(require_auth)):
     )
 
 
+# -------------------------
+# ADMIN TEST ROUTE
+# -------------------------
 @router.get("/admin")
 async def admin_only(user: dict = Depends(require_role("admin"))):
     return {"message": "Admin access granted"}
 
 
+# -------------------------
+# HEALTH CHECK
+# -------------------------
 @router.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-
+# -------------------------
+# TOKEN REFRESH
+# -------------------------
 @router.post("/refresh")
 async def refresh_token(request: Request):
+
     tokens = request.session.get("tokens")
 
     if not tokens or not tokens.get("refresh_token"):
@@ -133,13 +169,11 @@ async def refresh_token(request: Request):
 
     new_tokens = response.json()
 
-    # Update session tokens
     request.session["tokens"] = {
         "access_token": new_tokens.get("access_token"),
         "refresh_token": new_tokens.get("refresh_token"),
     }
 
-    # Update expiry
     decoded = jwt.get_unverified_claims(new_tokens.get("access_token"))
 
     user = request.session.get("user", {})
@@ -147,9 +181,11 @@ async def refresh_token(request: Request):
     request.session["user"] = user
 
     return {"message": "refreshed"}
-#-------------------
-#Add bulk users
-#------------------
+
+
+# -------------------------
+# BULK CREATE USERS (IMPROVED)
+# -------------------------
 @router.post("/admin/bulk-users")
 async def bulk_users(
     payload: list[dict],
@@ -157,9 +193,11 @@ async def bulk_users(
 ):
     result = await app_admin_service.bulk_create_users(payload)
     return wrap_response(result, message="Bulk user operation completed")
-#-----------------
-# DELETE USER ROUTE
-# ----------------
+
+
+# -------------------------
+# DELETE USER
+# -------------------------
 @router.delete("/admin/users/{user_id}")
 async def remove_user(
     user_id: str,
@@ -167,27 +205,103 @@ async def remove_user(
 ):
     await app_admin_service.delete_user(user_id)
     return wrap_response({}, message="User deleted successfully")
-#--------------
-#View Users (By roles) 
-#---------------
+
+
+# -------------------------
+# VIEW USERS
+# -------------------------
 @router.get("/admin/users")
 async def view_users(
     user: dict = Depends(require_role("admin"))
 ):
     users = await app_admin_service.get_users_by_role("user")
     return wrap_response(users, message="Users fetched successfully")
-#-------------------
-#ASSIGN ROLE
-#---------------------
+
+
+# -------------------------
+# ASSIGN ROLE
+# -------------------------
 @router.post("/admin/users/{user_id}/roles")
 async def assign_role_api(
     user_id: str,
     role_name: str,
     user: dict = Depends(require_role("admin"))
 ):
+
     await app_admin_service.assign_role(
         user_id,
         role_name,
         "fast-api-client"
     )
+
     return wrap_response({}, message="Role assigned successfully")
+
+
+# -------------------------
+# REMOVE ROLE
+# -------------------------
+@router.delete("/admin/users/{user_id}/roles")
+async def remove_role_api(
+    user_id: str,
+    role_name: str,
+    user: dict = Depends(require_role("admin"))
+):
+
+    await app_admin_service.remove_role(
+        user_id,
+        role_name,
+        "fast-api-client"
+    )
+
+    return wrap_response({}, message="Role removed successfully")
+
+
+# -------------------------
+# UPDATE ROLE
+# -------------------------
+@router.put("/admin/users/{user_id}/roles")
+async def update_role_api(
+    user_id: str,
+    old_role: str,
+    new_role: str,
+    user: dict = Depends(require_role("admin"))
+):
+
+    await app_admin_service.update_role(
+        user_id,
+        old_role,
+        new_role,
+        "fast-api-client"
+    )
+
+    return wrap_response({}, message="Role updated successfully")
+
+
+# -------------------------
+# USER ACCOUNT CONSOLE
+# -------------------------
+@router.get("/account")
+async def redirect_to_account_console(
+    user: dict = Depends(require_auth)
+):
+    account_url = (
+        f"{settings.KEYCLOAK_SERVER_URL}/realms/"
+        f"{settings.KEYCLOAK_REALM}/account"
+    )
+
+    return RedirectResponse(account_url)
+
+
+# -------------------------
+# ADMIN CONSOLE
+# -------------------------
+@router.get("/admin/console")
+async def redirect_to_admin_console(
+    user: dict = Depends(require_role("admin"))
+):
+    admin_console_url = (
+        f"{settings.KEYCLOAK_SERVER_URL}/admin/"
+        f"{settings.KEYCLOAK_REALM}/console"
+    )
+
+    return RedirectResponse(admin_console_url)
