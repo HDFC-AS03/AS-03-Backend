@@ -14,32 +14,41 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+
   keycloak:
     image: quay.io/keycloak/keycloak:24.0.1
     container_name: keycloak
-
-    command:
-      - start-dev
-      - --spi-theme-cache-themes=false
-      - --spi-theme-cache-templates=false
-      - --spi-theme-static-max-age=-1
-
+    command: start-dev
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: keycloak
+
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
 
-    volumes:
-      - ../themes/my-company-my-company-theme
+      # SMTP configuration for MailHog
+      KC_SPI_EMAIL_HOST: mailhog
+      KC_SPI_EMAIL_PORT: 1025
+      KC_SPI_EMAIL_FROM: noreply@example.com
+      KC_SPI_EMAIL_FROM_DISPLAY_NAME: Keycloak
 
     ports:
       - "8080:8080"
 
     depends_on:
       - postgres
+      - mailhog
+
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
 
 volumes:
   postgres_data:
