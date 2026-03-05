@@ -167,7 +167,6 @@ Inside Keycloak:
 3.  Locate:
 
 ```{=html}
-<!-- -->
 ```
     fastapi-app
     fast-api-admin-client
@@ -333,6 +332,7 @@ The backend authentication service exposes the following APIs.
   PUT      /admin/users/{user_id}/roles   Update role
 
 ------------------------------------------------------------------------
+
 
 # 15. Stopping the System
 
