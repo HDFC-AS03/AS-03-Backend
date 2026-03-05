@@ -12,17 +12,17 @@ import secrets
 router = APIRouter()
 
 # Cookie configuration
-COOKIE_NAME = "refresh_token"
+ACCESS_TOKEN_COOKIE = "access_token"  # httpOnly cookie for access token
+REFRESH_TOKEN_COOKIE = "refresh_token"  # httpOnly cookie for refresh token
 CSRF_COOKIE_NAME = "csrf_token"
 OAUTH_STATE_COOKIE = "oauth_state"  # For PKCE/state during OAuth flow
-COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
+ACCESS_TOKEN_MAX_AGE = 60 * 5  # 5 minutes (short-lived)
+REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 OAUTH_STATE_MAX_AGE = 60 * 5  # 5 minutes for OAuth state
 IS_PRODUCTION = os.getenv("ENV", "dev") == "production"
 
-# Development vs Production token handling:
-# - DEV: Both tokens in URL hash (stored in sessionStorage) - XSS risk but works cross-port
-# - PROD: Access token in URL, refresh token in httpOnly cookie (requires same-origin)
-USE_COOKIE_REFRESH = IS_PRODUCTION
+# Always use httpOnly cookies for security (enterprise pattern)
+USE_HTTPONLY_COOKIES = True
 
 
 def generate_csrf_token() -> str:
@@ -37,12 +37,7 @@ async def validate_csrf(
     """
     CSRF validation dependency for state-changing endpoints.
     Validates that X-CSRF-Token header matches csrf_token cookie.
-    Only enforced in production mode with httpOnly cookies.
     """
-    if not USE_COOKIE_REFRESH:
-        # Skip CSRF in dev mode (no httpOnly cookies)
-        return True
-    
     csrf_cookie = request.cookies.get(CSRF_COOKIE_NAME)
     
     if not csrf_cookie:
@@ -142,40 +137,43 @@ async def auth_callback(request: Request):
     access_token = tokens["access_token"]
     refresh_token = tokens.get("refresh_token")
     
-    if USE_COOKIE_REFRESH:
-        # Production: Only access_token in URL, refresh token in httpOnly cookie
-        token_params = urlencode({"access_token": access_token})
-        response = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard#{token_params}")
-        
-        if refresh_token:
-            response.set_cookie(
-                key=COOKIE_NAME,
-                value=refresh_token,
-                httponly=True,
-                secure=True,  # Requires HTTPS in production
-                samesite="lax",
-                max_age=COOKIE_MAX_AGE,
-                path="/",
-            )
-        
-        # Set CSRF token cookie (readable by JS for double-submit pattern)
-        csrf_token = generate_csrf_token()
+    # Enterprise pattern: Store BOTH tokens in httpOnly cookies, redirect without tokens in URL
+    response = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard")
+    
+    # Set access_token in httpOnly cookie (short-lived)
+    response.set_cookie(
+        key=ACCESS_TOKEN_COOKIE,
+        value=access_token,
+        httponly=True,
+        secure=IS_PRODUCTION,  # HTTPS only in production
+        samesite="lax",
+        max_age=ACCESS_TOKEN_MAX_AGE,
+        path="/",
+    )
+    
+    # Set refresh_token in httpOnly cookie (longer-lived)
+    if refresh_token:
         response.set_cookie(
-            key=CSRF_COOKIE_NAME,
-            value=csrf_token,
-            httponly=False,  # Must be readable by JavaScript
-            secure=True,
+            key=REFRESH_TOKEN_COOKIE,
+            value=refresh_token,
+            httponly=True,
+            secure=IS_PRODUCTION,
             samesite="lax",
-            max_age=COOKIE_MAX_AGE,
+            max_age=REFRESH_TOKEN_MAX_AGE,
             path="/",
         )
-    else:
-        # Development: Both tokens in URL (frontend stores in sessionStorage)
-        token_params = urlencode({
-            "access_token": access_token,
-            "refresh_token": refresh_token or "",
-        })
-        response = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard#{token_params}")
+    
+    # Set CSRF token cookie (readable by JS for double-submit pattern)
+    csrf_token = generate_csrf_token()
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=csrf_token,
+        httponly=False,  # Must be readable by JavaScript
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_MAX_AGE,
+        path="/",
+    )
     
     # Clear the oauth_state cookie
     response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/")
@@ -189,7 +187,7 @@ KEYCLOAK_REFRESH_URL = os.getenv("KEYCLOAK_REFRESH_URL", "http://host.docker.int
 
 @router.get("/logout")
 async def logout():
-    """Logout: clear cookies and redirect to Keycloak logout."""
+    """Logout: clear all auth cookies and redirect to Keycloak logout."""
     logout_url = (
         f"{KEYCLOAK_EXTERNAL_URL}/realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/logout"
@@ -200,9 +198,18 @@ async def logout():
         f"{settings.FRONTEND_URL}&client_id={settings.KEYCLOAK_CLIENT_ID}"
     )
     
+    # Clear the httpOnly access_token cookie
+    response.delete_cookie(
+        key=ACCESS_TOKEN_COOKIE,
+        path="/",
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+    )
+    
     # Clear the httpOnly refresh_token cookie
     response.delete_cookie(
-        key=COOKIE_NAME,
+        key=REFRESH_TOKEN_COOKIE,
         path="/",
         httponly=True,
         secure=IS_PRODUCTION,
@@ -257,30 +264,15 @@ async def refresh_token(
     _csrf: bool = Depends(validate_csrf),
 ):
     """
-    Refresh access token.
-    - Production: reads refresh_token from httpOnly cookie, requires CSRF token
-    - Development: reads refresh_token from request body
-    Returns new access_token (and refresh_token in dev mode).
+    Refresh access token using httpOnly refresh_token cookie.
+    Returns new access_token in httpOnly cookie (browser) or JSON (API clients).
     """
-    refresh_token_value = None
-    
-    if USE_COOKIE_REFRESH:
-        # Production: Read from httpOnly cookie
-        refresh_token_value = request.cookies.get(COOKIE_NAME)
-        if not refresh_token_value:
-            raise HTTPException(status_code=401, detail="No refresh token cookie")
-    else:
-        # Development: Read from request body
-        try:
-            body = await request.json()
-            refresh_token_value = body.get("refresh_token")
-        except Exception:
-            pass
-        if not refresh_token_value:
-            raise HTTPException(status_code=400, detail="refresh_token required in body")
+    # Read refresh_token from httpOnly cookie
+    refresh_token_value = request.cookies.get(REFRESH_TOKEN_COOKIE)
+    if not refresh_token_value:
+        raise HTTPException(status_code=401, detail="No refresh token cookie")
 
     # Use KEYCLOAK_REFRESH_URL - backend can reach host.docker.internal:8080
-    # Tokens are issued by localhost:8080, but Keycloak accepts refresh from same realm
     token_url = (
         f"{KEYCLOAK_REFRESH_URL}/realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
@@ -299,43 +291,49 @@ async def refresh_token(
 
     if keycloak_response.status_code != 200:
         logging.warning(f"Refresh failed: {keycloak_response.status_code}")
-        if USE_COOKIE_REFRESH:
-            response.delete_cookie(key=COOKIE_NAME, path="/")
+        # Clear invalid cookies
+        response.delete_cookie(key=ACCESS_TOKEN_COOKIE, path="/")
+        response.delete_cookie(key=REFRESH_TOKEN_COOKIE, path="/")
         raise HTTPException(status_code=401, detail="Refresh token expired or invalid")
 
     new_tokens = keycloak_response.json()
+    new_access_token = new_tokens.get("access_token")
+    new_refresh_token = new_tokens.get("refresh_token")
     
-    if USE_COOKIE_REFRESH:
-        # Production: Update httpOnly cookie, return only access_token
-        new_refresh_token = new_tokens.get("refresh_token")
-        if new_refresh_token:
-            response.set_cookie(
-                key=COOKIE_NAME,
-                value=new_refresh_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=COOKIE_MAX_AGE,
-                path="/",
-            )
-        
-        # Rotate CSRF token on successful refresh
-        new_csrf = generate_csrf_token()
+    # Update access_token cookie
+    response.set_cookie(
+        key=ACCESS_TOKEN_COOKIE,
+        value=new_access_token,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        max_age=ACCESS_TOKEN_MAX_AGE,
+        path="/",
+    )
+    
+    # Update refresh_token cookie (token rotation)
+    if new_refresh_token:
         response.set_cookie(
-            key=CSRF_COOKIE_NAME,
-            value=new_csrf,
-            httponly=False,
-            secure=True,
+            key=REFRESH_TOKEN_COOKIE,
+            value=new_refresh_token,
+            httponly=True,
+            secure=IS_PRODUCTION,
             samesite="lax",
-            max_age=COOKIE_MAX_AGE,
+            max_age=REFRESH_TOKEN_MAX_AGE,
             path="/",
         )
-        
-        return {"access_token": new_tokens.get("access_token"), "csrf_token": new_csrf}
-    else:
-        # Development: Return both tokens
-        return {
-            "access_token": new_tokens.get("access_token"),
-            "refresh_token": new_tokens.get("refresh_token"),
-        }
+    
+    # Rotate CSRF token on successful refresh
+    new_csrf = generate_csrf_token()
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=new_csrf,
+        httponly=False,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_MAX_AGE,
+        path="/",
+    )
+    
+    return {"success": True, "message": "Token refreshed"}
 

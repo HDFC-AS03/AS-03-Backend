@@ -282,15 +282,25 @@ if bypass_paths[uri] then
     return  -- Allow through without JWT
 end
 
--- 1. Check Authorization header
+-- 1. Extract token from Authorization header OR httpOnly cookie
+local token = nil
+
+-- First try Authorization header
 local auth_header = ngx.var.http_authorization
-if not auth_header then
-    return send_error(401, "Missing Authorization header")
+if auth_header then
+    local _, _, bearer_token = string.find(auth_header, "Bearer%s+(.+)")
+    if bearer_token then
+        token = bearer_token
+    end
 end
 
-local _, _, token = string.find(auth_header, "Bearer%s+(.+)")
+-- Fallback to httpOnly cookie (enterprise pattern)
 if not token then
-    return send_error(401, "Invalid Authorization format")
+    token = ngx.var.cookie_access_token
+end
+
+if not token then
+    return send_error(401, "Missing authentication")
 end
 
 -- 2. Split token into parts

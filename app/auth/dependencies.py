@@ -4,15 +4,29 @@ import logging
 
 logger = logging.getLogger("auth")
 
+# Cookie name must match routes.py
+ACCESS_TOKEN_COOKIE = "access_token"
+
 
 async def get_bearer_user(request: Request):
-    """Extract and validate JWT from Authorization header."""
+    """
+    Extract and validate JWT from:
+    1. Authorization header (Bearer token) - for API clients
+    2. httpOnly cookie (access_token) - for browser clients
+    """
+    token = None
+    
+    # First, try Authorization header
     auth = request.headers.get("Authorization")
+    if auth and auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1]
+    
+    # Fallback to httpOnly cookie
+    if not token:
+        token = request.cookies.get(ACCESS_TOKEN_COOKIE)
 
-    if not auth or not auth.lower().startswith("bearer "):
+    if not token:
         return None
-
-    token = auth.split(" ", 1)[1]
 
     try:
         claims = await validate_bearer_token(token)
