@@ -8,6 +8,7 @@ import httpx
 import logging
 import os
 import secrets
+from app.services import app_admin_service
 
 router = APIRouter()
 
@@ -337,3 +338,127 @@ async def refresh_token(
     
     return {"success": True, "message": "Token refreshed"}
 
+
+
+# -------------------------
+# BULK CREATE USERS (IMPROVED)
+# -------------------------
+@router.post("/admin/bulk-users")
+async def bulk_users(
+    payload: list[dict],
+    user: dict = Depends(require_role("admin"))
+):
+    result = await app_admin_service.bulk_create_users(payload)
+    return wrap_response(result, message="Bulk user operation completed")
+
+
+# -------------------------
+# DELETE USER
+# -------------------------
+@router.delete("/admin/users/{user_id}")
+async def remove_user(
+    user_id: str,
+    user: dict = Depends(require_role("admin"))
+):
+    await app_admin_service.delete_user(user_id)
+    return wrap_response({}, message="User deleted successfully")
+
+
+# -------------------------
+# VIEW USERS
+# -------------------------
+@router.get("/admin/users")
+async def view_users(
+    user: dict = Depends(require_role("admin"))
+):
+    users = await app_admin_service.get_users_by_role("user")
+    return wrap_response(users, message="Users fetched successfully")
+
+
+# -------------------------
+# ASSIGN ROLE
+# -------------------------
+@router.post("/admin/users/{user_id}/roles")
+async def assign_role_api(
+    user_id: str,
+    role_name: str,
+    user: dict = Depends(require_role("admin"))
+):
+
+    await app_admin_service.assign_role(
+        user_id,
+        role_name,
+        "fast-api-client"
+    )
+
+    return wrap_response({}, message="Role assigned successfully")
+
+
+# -------------------------
+# REMOVE ROLE
+# -------------------------
+@router.delete("/admin/users/{user_id}/roles")
+async def remove_role_api(
+    user_id: str,
+    role_name: str,
+    user: dict = Depends(require_role("admin"))
+):
+
+    await app_admin_service.remove_role(
+        user_id,
+        role_name,
+        "fast-api-client"
+    )
+
+    return wrap_response({}, message="Role removed successfully")
+
+
+# -------------------------
+# UPDATE ROLE
+# -------------------------
+@router.put("/admin/users/{user_id}/roles")
+async def update_role_api(
+    user_id: str,
+    old_role: str,
+    new_role: str,
+    user: dict = Depends(require_role("admin"))
+):
+
+    await app_admin_service.update_role(
+        user_id,
+        old_role,
+        new_role,
+        "fast-api-client"
+    )
+
+    return wrap_response({}, message="Role updated successfully")
+
+
+# -------------------------
+# USER ACCOUNT CONSOLE
+# -------------------------
+@router.get("/account")
+async def redirect_to_account_console(
+    user: dict = Depends(require_auth)
+):
+    account_url = (
+        f"{settings.KEYCLOAK_SERVER_URL}/realms/"
+        f"{settings.KEYCLOAK_REALM}/account"
+    )
+
+    return RedirectResponse(account_url)
+
+
+# -------------------------
+# ADMIN CONSOLE
+# -------------------------
+@router.get("/admin/console")
+async def redirect_to_admin_console(
+    user: dict = Depends(require_role("admin"))
+):
+    admin_console_url = (
+        f"{settings.KEYCLOAK_SERVER_URL}/admin/"
+        f"{settings.KEYCLOAK_REALM}/console"
+    )
+
+    return RedirectResponse(admin_console_url)
