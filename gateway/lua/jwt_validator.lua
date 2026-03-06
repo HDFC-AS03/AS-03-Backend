@@ -8,6 +8,51 @@ local http = require "resty.http"
 local cjson = require "cjson"
 local ffi = require "ffi"
 
+local limit_req = require "resty.limit.req"
+
+
+-- ============================================================
+-- Rate Limiting Configuration
+-- ============================================================
+
+local rate_store = "rate_limit_store"
+
+-- 10 requests per second with burst of 20
+local limiter, err = limit_req.new(rate_store, 10, 20)
+
+if not limiter then
+    ngx.log(ngx.ERR, "failed to create rate limiter: ", err)
+end
+
+
+-- ============================================================
+-- Rate Limiting Check
+-- ============================================================
+
+if limiter then
+
+    -- identify user by header first
+    local key = ngx.var.http_x_user_id
+
+    -- fallback to IP
+    if not key or key == "" then
+        key = ngx.var.binary_remote_addr
+    end
+
+    local delay, err = limiter:incoming(key, true)
+
+    if not delay then
+        if err == "rejected" then
+            return send_error(429, "Too many requests")
+        end
+    end
+
+    if delay > 0 then
+        ngx.sleep(delay)
+    end
+end
+
+
 -- ============================================================
 -- Configuration
 -- ============================================================
