@@ -44,18 +44,25 @@ ACCESS_TOKEN_COOKIE = "access_token"
 
 
 async def get_gateway_user(request: Request):
+
     user_id = request.headers.get("X-User-ID")
 
     if not user_id:
         return None
 
+    roles = request.headers.get("X-User-Roles", "[]")
+
+    try:
+        roles = json.loads(roles)
+    except Exception:
+        roles = []
+
     return {
         "sub": user_id,
         "email": request.headers.get("X-User-Email"),
         "preferred_username": request.headers.get("X-User-Preferred-Username"),
-        "roles": request.headers.get("X-User-Roles", "[]"),
+        "roles": roles,
     }
-
 
 async def require_auth(user: dict = Depends(get_gateway_user)):
     """Require valid JWT bearer token."""
@@ -108,10 +115,7 @@ def require_role(role: str):
 
     def checker(user: dict = Depends(require_auth)):
 
-        roles = user.get("roles")
-
-        if isinstance(roles, str):
-            roles = json.loads(roles)
+        roles = user.get("roles", [])
 
         if role not in roles:
             raise HTTPException(
