@@ -57,11 +57,21 @@ async def get_gateway_user(request: Request):
     except Exception:
         roles = []
 
+    # Parse token expiry for session timer
+    exp = None
+    exp_header = request.headers.get("X-Token-Exp")
+    if exp_header:
+        try:
+            exp = int(exp_header)
+        except ValueError:
+            pass
+
     return {
         "sub": user_id,
         "email": request.headers.get("X-User-Email"),
         "preferred_username": request.headers.get("X-User-Preferred-Username"),
         "roles": roles,
+        "exp": exp,
     }
 
 async def require_auth(user: dict = Depends(get_gateway_user)):

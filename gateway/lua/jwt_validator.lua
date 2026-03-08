@@ -370,6 +370,7 @@ ngx.req.set_header("X-User-ID",payload.sub or "")
 ngx.req.set_header("X-User-Email",payload.email or "")
 ngx.req.set_header("X-User-Preferred-Username",payload.preferred_username or "")
 ngx.req.set_header("X-User-Roles",payload.realm_access and cjson.encode(payload.realm_access.roles) or "[]")
+ngx.req.set_header("X-Token-Exp",tostring(payload.exp or 0))
 ngx.req.set_header("X-Token-Verified","true")
 
 return
