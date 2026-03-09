@@ -26,6 +26,9 @@ services:
       - --spi-theme-cache-templates=false
       - --spi-theme-static-max-age=-1
 
+    volumes:
+      - ./theme/mytheme:/opt/keycloak/themes/mytheme   # ✅ ONLY THIS LINE IS NEW
+
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
