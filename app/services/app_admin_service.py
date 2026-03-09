@@ -171,3 +171,16 @@ async def update_role(
 
     await remove_role(user_id, old_role, client_id)
     await assign_role(user_id, new_role, client_id)
+    
+#------------------------------
+# Fetch User Roles
+#------------------------------ 
+async def get_user_roles(user_id: str) -> List[Dict]:
+    admin_token = await get_admin_token()
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(
+            f"{BASE_ADMIN_URL}/users/{user_id}/role-mappings/realm",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        r.raise_for_status()
+        return r.json()

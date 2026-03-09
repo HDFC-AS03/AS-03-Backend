@@ -388,7 +388,7 @@ async def assign_role_api(
     await app_admin_service.assign_role(
         user_id,
         role_name,
-        "fast-api-client"
+        settings.KEYCLOAK_CLIENT_ID
     )
 
     return wrap_response({}, message="Role assigned successfully")
@@ -407,7 +407,7 @@ async def remove_role_api(
     await app_admin_service.remove_role(
         user_id,
         role_name,
-        "fast-api-client"
+        settings.KEYCLOAK_CLIENT_ID
     )
 
     return wrap_response({}, message="Role removed successfully")
@@ -428,7 +428,7 @@ async def update_role_api(
         user_id,
         old_role,
         new_role,
-        "fast-api-client"
+        settings.KEYCLOAK_CLIENT_ID
     )
 
     return wrap_response({}, message="Role updated successfully")
@@ -462,3 +462,14 @@ async def redirect_to_admin_console(
     )
 
     return RedirectResponse(admin_console_url)
+
+# -------------------------
+# GET USER ROLES
+# -------------------------
+@router.get("/admin/users/{user_id}/roles")
+async def get_user_roles_api(
+    user_id: str,
+    user: dict = Depends(require_role("admin"))
+):
+    roles = await app_admin_service.get_user_roles(user_id)
+    return wrap_response(roles, message="User roles fetched successfully")
