@@ -48,9 +48,36 @@ async def bulk_create_users(users: List[Dict]) -> Dict:
                     },
                 )
 
+                # Handle duplicate user (409 Conflict)
+                if r.status_code == 409:
+                    results.append({
+                        "username": user["username"],
+                        "status": "failed",
+                        "error": "User already exists"
+                    })
+                    continue
+
                 r.raise_for_status()
 
                 user_id = r.headers.get("Location").split("/")[-1]
+
+                # Assign the requested role (default to "user" if not specified)
+                role_name = user.get("role", "user")
+                try:
+                    role_resp = await client.get(
+                        f"{BASE_ADMIN_URL}/roles/{role_name}",
+                        headers={"Authorization": f"Bearer {admin_token}"},
+                    )
+                    role_resp.raise_for_status()
+                    role_data = role_resp.json()
+
+                    await client.post(
+                        f"{BASE_ADMIN_URL}/users/{user_id}/role-mappings/realm",
+                        headers={"Authorization": f"Bearer {admin_token}"},
+                        json=[role_data],
+                    )
+                except Exception:
+                    pass  # Role assignment is optional
 
                 await client.put(
                     f"{BASE_ADMIN_URL}/users/{user_id}/send-verify-email",
@@ -89,6 +116,26 @@ async def delete_user(user_id: str) -> None:
 
 
 # -----------------------------------------------------
+# GET ALL USERS
+# -----------------------------------------------------
+async def get_all_users() -> List[Dict]:
+    """Fetch all users from Keycloak (excluding service accounts)."""
+    admin_token = await get_admin_token()
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(
+            f"{BASE_ADMIN_URL}/users",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            params={"max": 1000},  # Adjust as needed
+        )
+        r.raise_for_status()
+        
+        # Filter out service accounts and admin users
+        users = r.json()
+        return [u for u in users if not u.get("serviceAccountClientId")]
+
+
+# -----------------------------------------------------
 # GET USERS BY ROLE
 # -----------------------------------------------------
 async def get_users_by_role(role_name: str) -> List[Dict]:
@@ -106,71 +153,68 @@ async def get_users_by_role(role_name: str) -> List[Dict]:
 
 
 # -----------------------------------------------------
-# ASSIGN CLIENT ROLE
+# ASSIGN REALM ROLE
 # -----------------------------------------------------
-async def assign_role(user_id: str, role_name: str, client_id: str) -> None:
-
+async def assign_role(user_id: str, role_name: str, client_id: str = None) -> None:
+    """Assign a realm-level role to a user."""
     admin_token = await get_admin_token()
-    client_uuid = await get_client_uuid(client_id, admin_token)
 
     async with httpx.AsyncClient(timeout=10) as client:
-
+        # Get the realm role
         role_resp = await client.get(
-            f"{BASE_ADMIN_URL}/clients/{client_uuid}/roles/{role_name}",
+            f"{BASE_ADMIN_URL}/roles/{role_name}",
             headers={"Authorization": f"Bearer {admin_token}"},
         )
-
         role_resp.raise_for_status()
         role_data = role_resp.json()
 
+        # Assign realm role to user
         assign_resp = await client.post(
-            f"{BASE_ADMIN_URL}/users/{user_id}/role-mappings/clients/{client_uuid}",
+            f"{BASE_ADMIN_URL}/users/{user_id}/role-mappings/realm",
             headers={"Authorization": f"Bearer {admin_token}"},
             json=[role_data],
         )
-
         assign_resp.raise_for_status()
 
 
 # -----------------------------------------------------
-# REMOVE CLIENT ROLE
+# REMOVE REALM ROLE
 # -----------------------------------------------------
-async def remove_role(user_id: str, role_name: str, client_id: str) -> None:
-
+async def remove_role(user_id: str, role_name: str, client_id: str = None) -> None:
+    """Remove a realm-level role from a user."""
     admin_token = await get_admin_token()
-    client_uuid = await get_client_uuid(client_id, admin_token)
 
     async with httpx.AsyncClient(timeout=10) as client:
-
+        # Get the realm role
         role_resp = await client.get(
-            f"{BASE_ADMIN_URL}/clients/{client_uuid}/roles/{role_name}",
+            f"{BASE_ADMIN_URL}/roles/{role_name}",
             headers={"Authorization": f"Bearer {admin_token}"},
         )
-
         role_resp.raise_for_status()
         role_data = role_resp.json()
 
-        delete_resp = await client.delete(
-            f"{BASE_ADMIN_URL}/users/{user_id}/role-mappings/clients/{client_uuid}",
+        # Remove realm role from user (use request() since delete() doesn't support json body)
+        delete_resp = await client.request(
+            method="DELETE",
+            url=f"{BASE_ADMIN_URL}/users/{user_id}/role-mappings/realm",
             headers={"Authorization": f"Bearer {admin_token}"},
             json=[role_data],
         )
-
         delete_resp.raise_for_status()
 
 
 # -----------------------------------------------------
-# UPDATE ROLE
+# UPDATE ROLE (REPLACE)
 # -----------------------------------------------------
 async def update_role(
     user_id: str,
     old_role: str,
     new_role: str,
-    client_id: str
+    client_id: str = None
 ) -> None:
-
-    await remove_role(user_id, old_role, client_id)
-    await assign_role(user_id, new_role, client_id)
+    """Replace one realm role with another."""
+    await remove_role(user_id, old_role)
+    await assign_role(user_id, new_role)
     
 #------------------------------
 # Fetch User Roles

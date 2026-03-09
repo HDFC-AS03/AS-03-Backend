@@ -61,6 +61,7 @@ services:
       - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID}
       - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET}
       - FRONTEND_URL=http://localhost:5173
+      - GATEWAY_URL=http://localhost
       - ENV=dev
     depends_on:
       - keycloak

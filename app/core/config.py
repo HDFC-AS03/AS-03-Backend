@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     KEYCLOAK_ADMIN_CLIENT_SECRET: str | None = None
 
     FRONTEND_URL: str = "http://localhost:5173"
+    GATEWAY_URL: str = "http://localhost"  # API gateway URL for OAuth callbacks
 
     @property
     def metadata_url(self) -> str:

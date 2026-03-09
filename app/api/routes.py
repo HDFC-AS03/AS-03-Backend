@@ -66,8 +66,8 @@ async def login(request: Request):
     # Generate cryptographic state for CSRF protection
     state = secrets.token_urlsafe(32)
     
-    # Build callback URL
-    redirect_uri = str(request.url_for("auth_callback"))
+    # Build callback URL using gateway URL (must match Keycloak valid redirect URIs)
+    redirect_uri = f"{settings.GATEWAY_URL}/callback"
     
     # Build Keycloak authorization URL
     auth_params = urlencode({
@@ -371,8 +371,14 @@ async def remove_user(
 async def view_users(
     user: dict = Depends(require_role("admin"))
 ):
-    users = await app_admin_service.get_users_by_role("user")
-    return wrap_response(users, message="Users fetched successfully")
+    # Fetch all users from Keycloak (includes those without roles)
+    all_users = await app_admin_service.get_all_users()
+    
+    # Exclude the current admin user from the list
+    current_user_id = user.get("sub")
+    filtered_users = [u for u in all_users if u.get("id") != current_user_id]
+    
+    return wrap_response(filtered_users, message="Users fetched successfully")
 
 
 # -------------------------
