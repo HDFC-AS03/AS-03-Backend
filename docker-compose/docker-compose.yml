@@ -16,6 +16,7 @@ services:
     networks:
       - app-network
 
+
   keycloak:
     image: quay.io/keycloak/keycloak:24.0.1
     container_name: keycloak
@@ -46,6 +47,7 @@ services:
     networks:
       - app-network
 
+
   backend:
     build: ..
     container_name: backend
@@ -68,6 +70,7 @@ services:
     networks:
       - app-network
 
+
   gateway:
     build: ../gateway
     container_name: api-gateway
@@ -81,9 +84,21 @@ services:
     networks:
       - app-network
 
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - app-network
+
+
 networks:
   app-network:
     driver: bridge
+
 
 volumes:
   postgres_data:
