@@ -448,7 +448,7 @@ async def redirect_to_account_console(
     user: dict = Depends(require_auth)
 ):
     account_url = (
-        f"{settings.KEYCLOAK_SERVER_URL}/realms/"
+        f"{KEYCLOAK_EXTERNAL_URL}/realms/"
         f"{settings.KEYCLOAK_REALM}/account"
     )
 
@@ -463,7 +463,7 @@ async def redirect_to_admin_console(
     user: dict = Depends(require_role("admin"))
 ):
     admin_console_url = (
-        f"{settings.KEYCLOAK_SERVER_URL}/admin/"
+        f"{KEYCLOAK_EXTERNAL_URL}/admin/"
         f"{settings.KEYCLOAK_REALM}/console"
     )
 
