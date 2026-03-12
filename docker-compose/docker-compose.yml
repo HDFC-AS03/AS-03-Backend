@@ -23,10 +23,7 @@ services:
 
     command:
       - start-dev
-      - --spi-theme-cache-themes=false
-      - --spi-theme-cache-templates=false
-      - --spi-theme-static-max-age=-1
-
+    
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
@@ -41,6 +38,8 @@ services:
 
     ports:
       - "8080:8080"
+    volumes:
+     - ./theme:/opt/keycloak/themes/
 
     depends_on:
       - postgres
@@ -62,7 +61,7 @@ services:
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID}
       - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET}
-      - FRONTEND_URL=http://localhost:5173
+      - FRONTEND_URL=http://localhost:3000
       - GATEWAY_URL=http://localhost
       - ENV=dev
     depends_on:
@@ -94,6 +93,14 @@ services:
     networks:
       - app-network
 
+  frontend:
+    build:
+      context: ./AS-03-Frontend   # sibling folder at repo root
+    container_name: as03-frontend
+    ports:
+      - "3000:80"
+    networks:
+      - app-network
 
 networks:
   app-network:
