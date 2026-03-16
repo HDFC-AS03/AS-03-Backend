@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     KEYCLOAK_ADMIN_CLIENT_ID: str | None = None
     KEYCLOAK_ADMIN_CLIENT_SECRET: str | None = None
 
-    FRONTEND_URL: str = "http://localhost:5173"
+    FRONTEND_URL: str = "http://localhost:3000"
     GATEWAY_URL: str = "http://localhost"  # API gateway URL for OAuth callbacks
 
     @property
