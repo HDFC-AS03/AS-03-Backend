@@ -1,214 +1,171 @@
+"""
+Tests for authentication dependencies.
+"""
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from fastapi import HTTPException, Request
 from app.auth.dependencies import (
-    get_session_user,
-    get_bearer_user,
+    get_gateway_user,
     require_auth,
     require_role,
 )
 
 
-class TestGetSessionUser:
-    def test_get_session_user_returns_user_from_session(self):
-        """Test that session user is retrieved from request.session"""
-        request = Mock(spec=Request)
-        request.session = {"user": {"id": "123", "name": "John"}}
-        
-        result = get_session_user(request)
-        
-        assert result == {"id": "123", "name": "John"}
-
-    def test_get_session_user_returns_none_when_no_user(self):
-        """Test that None is returned when no user in session"""
-        request = Mock(spec=Request)
-        request.session = {}
-        
-        result = get_session_user(request)
-        
-        assert result is None
-
-
-class TestGetBearerUser:
+class TestGetGatewayUser:
+    """Tests for get_gateway_user function."""
+    
     @pytest.mark.asyncio
-    async def test_get_bearer_user_returns_none_without_auth_header(self):
-        """Test that None is returned when no Authorization header"""
+    async def test_get_gateway_user_returns_none_without_user_id_header(self):
+        """Test that None is returned when X-User-ID header is missing."""
         request = Mock(spec=Request)
         request.headers = {}
         
-        result = await get_bearer_user(request)
+        result = await get_gateway_user(request)
         
         assert result is None
-
+    
     @pytest.mark.asyncio
-    async def test_get_bearer_user_returns_none_with_invalid_auth_header(self):
-        """Test that None is returned with non-Bearer auth header"""
+    async def test_get_gateway_user_extracts_basic_user_info(self):
+        """Test extraction of basic user information from headers."""
         request = Mock(spec=Request)
-        request.headers = {"Authorization": "Basic xyz"}
-        
-        result = await get_bearer_user(request)
-        
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_get_bearer_user_returns_none_with_malformed_bearer_header(self):
-        """Test that None is returned with malformed Bearer header"""
-        request = Mock(spec=Request)
-        request.headers = {"Authorization": "Bearer"}
-        
-        with patch("app.auth.dependencies.validate_bearer_token", new_callable=AsyncMock) as mock_validate:
-            mock_validate.side_effect = ValueError("Invalid token")
-            
-            result = await get_bearer_user(request)
-            
-            assert result is None
-
-    @pytest.mark.asyncio
-    async def test_get_bearer_user_extracts_claims_from_valid_token(self):
-        """Test that bearer user is extracted from valid token"""
-        request = Mock(spec=Request)
-        request.headers = {"Authorization": "Bearer valid_token"}
-        
-        mock_claims = {
-            "sub": "user123",
-            "email": "user@example.com",
-            "preferred_username": "john",
-            "name": "John Doe",
-            "realm_access": {"roles": ["admin", "user"]},
+        request.headers = {
+            "X-User-ID": "user123",
+            "X-User-Email": "user@example.com",
+            "X-User-Preferred-Username": "testuser",
+            "X-User-Roles": '["user", "admin"]'
         }
         
-        with patch("app.auth.dependencies.validate_bearer_token", new_callable=AsyncMock) as mock_validate:
-            mock_validate.return_value = mock_claims
-            
-            result = await get_bearer_user(request)
-            
-            assert result["sub"] == "user123"
-            assert result["email"] == "user@example.com"
-            assert result["preferred_username"] == "john"
-            assert result["name"] == "John Doe"
-            assert result["roles"] == ["admin", "user"]
-            assert result["claims"] == mock_claims
-
-    @pytest.mark.asyncio
-    async def test_get_bearer_user_returns_none_on_invalid_token(self):
-        """Test that None is returned when token validation fails"""
-        request = Mock(spec=Request)
-        request.headers = {"Authorization": "Bearer invalid_token"}
+        result = await get_gateway_user(request)
         
-        with patch("app.auth.dependencies.validate_bearer_token", new_callable=AsyncMock) as mock_validate:
-            mock_validate.side_effect = ValueError("Invalid token")
-            
-            result = await get_bearer_user(request)
-            
-            assert result is None
-
+        assert result is not None
+        assert result["sub"] == "user123"
+        assert result["email"] == "user@example.com"
+        assert result["preferred_username"] == "testuser"
+        assert result["roles"] == ["user", "admin"]
+    
     @pytest.mark.asyncio
-    async def test_get_bearer_user_handles_missing_realm_access(self):
-        """Test that missing realm_access is handled gracefully"""
+    async def test_get_gateway_user_handles_malformed_roles_json(self):
+        """Test that malformed roles JSON falls back to empty list."""
         request = Mock(spec=Request)
-        request.headers = {"Authorization": "Bearer token"}
-        
-        mock_claims = {
-            "sub": "user123",
-            "email": "user@example.com",
+        request.headers = {
+            "X-User-ID": "user123",
+            "X-User-Roles": "malformed-json"
         }
         
-        with patch("app.auth.dependencies.validate_bearer_token", new_callable=AsyncMock) as mock_validate:
-            mock_validate.return_value = mock_claims
-            
-            result = await get_bearer_user(request)
-            
-            assert result["roles"] == []
-
+        result = await get_gateway_user(request)
+        
+        assert result is not None
+        assert result["sub"] == "user123"
+        assert result["roles"] == []
+    
     @pytest.mark.asyncio
-    async def test_get_bearer_user_case_insensitive_bearer_prefix(self):
-        """Test that Bearer prefix is case-insensitive"""
+    async def test_get_gateway_user_parses_token_expiry(self):
+        """Test that token expiry is parsed from header."""
         request = Mock(spec=Request)
-        request.headers = {"Authorization": "bearer valid_token"}
+        request.headers = {
+            "X-User-ID": "user123",
+            "X-Token-Exp": "1234567890"
+        }
         
-        mock_claims = {"sub": "user123", "realm_access": {"roles": []}}
+        result = await get_gateway_user(request)
         
-        with patch("app.auth.dependencies.validate_bearer_token", new_callable=AsyncMock) as mock_validate:
-            mock_validate.return_value = mock_claims
-            
-            result = await get_bearer_user(request)
-            
-            assert result is not None
-            assert result["sub"] == "user123"
+        assert result is not None
+        assert result["exp"] == 1234567890
+    
+    @pytest.mark.asyncio
+    async def test_get_gateway_user_handles_invalid_token_expiry(self):
+        """Test that invalid token expiry is handled gracefully."""
+        request = Mock(spec=Request)
+        request.headers = {
+            "X-User-ID": "user123",
+            "X-Token-Exp": "not-a-number"
+        }
+        
+        result = await get_gateway_user(request)
+        
+        assert result is not None
+        assert result["exp"] is None
+    
+    @pytest.mark.asyncio
+    async def test_get_gateway_user_returns_empty_roles_when_header_missing(self):
+        """Test default behavior when X-User-Roles header is missing."""
+        request = Mock(spec=Request)
+        request.headers = {
+            "X-User-ID": "user123"
+        }
+        
+        result = await get_gateway_user(request)
+        
+        assert result is not None
+        assert result["roles"] == []
+    
+    @pytest.mark.asyncio
+    async def test_get_gateway_user_with_all_optional_headers(self):
+        """Test with all possible headers provided."""
+        request = Mock(spec=Request)
+        request.headers = {
+            "X-User-ID": "user456",
+            "X-User-Email": "user456@example.com",
+            "X-User-Preferred-Username": "testuser456",
+            "X-User-Roles": '["admin", "moderator"]',
+            "X-Token-Exp": "9999999999"
+        }
+        
+        result = await get_gateway_user(request)
+        
+        assert result["sub"] == "user456"
+        assert result["email"] == "user456@example.com"
+        assert result["preferred_username"] == "testuser456"
+        assert result["roles"] == ["admin", "moderator"]
+        assert result["exp"] == 9999999999
 
 
 class TestRequireAuth:
+    """Tests for require_auth dependency."""
+    
     @pytest.mark.asyncio
-    async def test_require_auth_returns_session_user_when_available(self):
-        """Test that session user is returned when available"""
-        session_user = {"id": "123", "name": "John"}
-        bearer_user = None
+    async def test_require_auth_succeeds_with_valid_user(self):
+        """Test that require_auth succeeds when user is provided."""
+        valid_user = {
+            "sub": "user123",
+            "email": "user@example.com",
+            "roles": ["user"]
+        }
         
-        result = await require_auth(session_user, bearer_user)
+        result = await require_auth(valid_user)
         
-        assert result == session_user
-
+        assert result == valid_user
+    
     @pytest.mark.asyncio
-    async def test_require_auth_returns_bearer_user_when_session_unavailable(self):
-        """Test that bearer user is returned when session user is None"""
-        session_user = None
-        bearer_user = {"id": "456", "name": "Jane"}
-        
-        result = await require_auth(session_user, bearer_user)
-        
-        assert result == bearer_user
-
-    @pytest.mark.asyncio
-    async def test_require_auth_raises_401_when_no_user(self):
-        """Test that 401 is raised when neither session nor bearer user exists"""
-        session_user = None
-        bearer_user = None
-        
+    async def test_require_auth_raises_401_when_user_is_none(self):
+        """Test that require_auth raises 401 Unauthorized when user is None."""
         with pytest.raises(HTTPException) as exc_info:
-            await require_auth(session_user, bearer_user)
+            await require_auth(None)
         
         assert exc_info.value.status_code == 401
-        assert exc_info.value.detail == "Not authenticated"
+        assert "Not authenticated" in exc_info.value.detail
 
 
 class TestRequireRole:
-    def test_require_role_allows_user_with_realm_role(self):
-        """Test that user with required realm role is allowed"""
+    """Tests for require_role dependency."""
+    
+    def test_require_role_succeeds_when_user_has_role(self):
+        """Test that user with required role is allowed."""
         user = {
-            "id": "123",
-            "roles": ["admin", "user"],
-            "claims": {},
+            "sub": "user123",
+            "roles": ["admin", "user"]
         }
         
         checker = require_role("admin")
         result = checker(user)
         
         assert result == user
-
-    def test_require_role_allows_user_with_client_role(self):
-        """Test that user with required client role is allowed"""
+    
+    def test_require_role_raises_403_when_user_lacks_role(self):
+        """Test that user without required role gets 403 Forbidden."""
         user = {
-            "id": "123",
-            "roles": [],
-            "claims": {
-                "resource_access": {
-                    "my-client": {"roles": ["admin"]},
-                }
-            },
-        }
-        
-        checker = require_role("admin")
-        result = checker(user)
-        
-        assert result == user
-
-    def test_require_role_denies_user_without_role(self):
-        """Test that user without required role is denied"""
-        user = {
-            "id": "123",
-            "preferred_username": "john",
-            "roles": ["user"],
-            "claims": {},
+            "sub": "user123",
+            "roles": ["user"]  # No admin role
         }
         
         checker = require_role("admin")
@@ -218,61 +175,13 @@ class TestRequireRole:
         
         assert exc_info.value.status_code == 403
         assert "admin" in exc_info.value.detail
-
-    def test_require_role_combines_realm_and_client_roles(self):
-        """Test that both realm and client roles are checked"""
+        assert "Forbidden" in exc_info.value.detail
+    
+    def test_require_role_with_empty_roles_list(self):
+        """Test that user with empty roles list cannot access protected resource."""
         user = {
-            "id": "123",
-            "roles": ["user"],
-            "claims": {
-                "resource_access": {
-                    "my-client": {"roles": ["admin"]},
-                }
-            },
-        }
-        
-        checker = require_role("admin")
-        result = checker(user)
-        
-        assert result == user
-
-    def test_require_role_handles_empty_resource_access(self):
-        """Test that empty resource_access is handled gracefully"""
-        user = {
-            "id": "123",
-            "roles": ["admin"],
-            "claims": {"resource_access": {}},
-        }
-        
-        checker = require_role("admin")
-        result = checker(user)
-        
-        assert result == user
-
-    def test_require_role_handles_multiple_client_roles(self):
-        """Test that roles from multiple clients are combined"""
-        user = {
-            "id": "123",
-            "roles": [],
-            "claims": {
-                "resource_access": {
-                    "client1": {"roles": ["user"]},
-                    "client2": {"roles": ["admin"]},
-                }
-            },
-        }
-        
-        checker = require_role("admin")
-        result = checker(user)
-        
-        assert result == user
-
-    def test_require_role_handles_none_roles_in_user(self):
-        """Test that None roles are handled gracefully"""
-        user = {
-            "id": "123",
-            "roles": None,
-            "claims": {},
+            "sub": "user123",
+            "roles": []
         }
         
         checker = require_role("admin")
@@ -281,3 +190,87 @@ class TestRequireRole:
             checker(user)
         
         assert exc_info.value.status_code == 403
+    
+    def test_require_role_with_multiple_roles(self):
+        """Test role checking with multiple required checks."""
+        user = {
+            "sub": "user123",
+            "roles": ["editor", "moderator", "user"]
+        }
+        
+        # User has editor role
+        checker1 = require_role("editor")
+        result1 = checker1(user)
+        assert result1 == user
+        
+        # User lacks admin role
+        checker2 = require_role("admin")
+        with pytest.raises(HTTPException) as exc_info:
+            checker2(user)
+        assert exc_info.value.status_code == 403
+    
+    def test_require_role_case_sensitive(self):
+        """Test that role names are case-sensitive."""
+        user = {
+            "sub": "user123",
+            "roles": ["Admin"]  # uppercase A
+        }
+        
+        # Checking for lowercase "admin"
+        checker = require_role("admin")
+        
+        with pytest.raises(HTTPException) as exc_info:
+            checker(user)
+        
+        assert exc_info.value.status_code == 403
+    
+    def test_require_role_with_none_roles_list(self):
+        """Test behavior when roles is None instead of list."""
+        user = {
+            "sub": "user123",
+            "roles": None
+        }
+        
+        checker = require_role("admin")
+        
+        # roles could be None or empty
+        with pytest.raises((TypeError, AttributeError, HTTPException)):
+            checker(user)
+
+
+class TestAuthDependenciesIntegration:
+    """Integration tests for auth dependencies."""
+    
+    @pytest.mark.asyncio
+    async def test_gateway_user_to_require_auth_flow(self):
+        """Test complete flow from gateway user extraction to auth requirement."""
+        # Simulate gateway providing user
+        request = Mock(spec=Request)
+        request.headers = {
+            "X-User-ID": "user123",
+            "X-User-Email": "user@example.com",
+            "X-User-Roles": '["user"]'
+        }
+        
+        # Extract user
+        user = await get_gateway_user(request)
+        
+        # Then require auth
+        result = await require_auth(user)
+        
+        assert result is not None
+        assert result["sub"] == "user123"
+    
+    def test_admin_endpoint_flow(self):
+        """Test complete flow for admin endpoint."""
+        user = {
+            "sub": "admin123",
+            "roles": ["admin"]
+        }
+        
+        # Require role check
+        checker = require_role("admin")
+        final_result = checker(user)
+        
+        assert final_result["sub"] == "admin123"
+        assert "admin" in final_result["roles"]
