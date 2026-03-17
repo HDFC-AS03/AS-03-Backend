@@ -71,7 +71,6 @@ services:
     networks:
       - app-network
 
-
   gateway:
     build: ../gateway
     container_name: api-gateway
@@ -96,7 +95,6 @@ services:
 
     networks:
       - app-network
-
 
   mailhog:
     image: mailhog/mailhog

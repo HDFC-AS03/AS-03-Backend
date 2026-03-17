@@ -8,6 +8,8 @@ import httpx
 import logging
 import secrets
 from app.services import app_admin_service
+import hashlib
+import base64
 
 router = APIRouter()
 
@@ -18,6 +20,7 @@ ACCESS_TOKEN_COOKIE  = "access_token"
 REFRESH_TOKEN_COOKIE = "refresh_token"
 CSRF_COOKIE_NAME     = "csrf_token"
 OAUTH_STATE_COOKIE   = "oauth_state"
+PKCE_VERIFIER_COOKIE = "pkce_verifier"
 
 # Single source of truth — everything from .env via settings
 ACCESS_TOKEN_MAX_AGE  = settings.ACCESS_TOKEN_MAX_AGE
@@ -65,6 +68,12 @@ async def login(request: Request):
     """Initiate OAuth flow - stateless using cookie for state storage."""
     # Generate cryptographic state for CSRF protection
     state = secrets.token_urlsafe(32)
+
+    # PKCE generation
+    code_verifier = secrets.token_urlsafe(64)
+
+    challenge = hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = base64.urlsafe_b64encode(challenge).decode().rstrip("=")
     
     # Build callback URL using gateway URL (must match Keycloak valid redirect URIs)
     redirect_uri = f"{settings.GATEWAY_URL}/callback"
@@ -76,11 +85,23 @@ async def login(request: Request):
         "response_type": "code",
         "scope": "openid email profile",
         "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     })
     auth_url = f"{KEYCLOAK_EXTERNAL_URL}/realms/{settings.KEYCLOAK_REALM}/protocol/openid-connect/auth?{auth_params}"
     
     # Set state in cookie and redirect
     response = RedirectResponse(url=auth_url)
+    # Store PKCE verifier
+    response.set_cookie(
+        key=PKCE_VERIFIER_COOKIE,
+        value=code_verifier,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        max_age=OAUTH_STATE_MAX_AGE,
+        path="/",
+    )
     response.set_cookie(
         key=OAUTH_STATE_COOKIE,
         value=state,
@@ -113,9 +134,17 @@ async def auth_callback(request: Request):
         raise HTTPException(status_code=400, detail="Missing OAuth state cookie")
     if not secrets.compare_digest(stored_state, state):
         raise HTTPException(status_code=400, detail="Invalid state - possible CSRF attack")
+
+
+    # Retrieve PKCE verifier
+    code_verifier = request.cookies.get(PKCE_VERIFIER_COOKIE)
+
+    if not code_verifier:
+        raise HTTPException(status_code=400, detail="Missing PKCE verifier")
     
     # Exchange code for tokens
-    redirect_uri = str(request.url_for("auth_callback"))
+    # redirect_uri = str(request.url_for("auth_callback"))
+    redirect_uri = f"{settings.GATEWAY_URL}/callback"
     token_url = f"{settings.KEYCLOAK_SERVER_URL}/realms/{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
     
     async with httpx.AsyncClient(timeout=10) as client:
@@ -127,6 +156,7 @@ async def auth_callback(request: Request):
                 "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
                 "code": code,
                 "redirect_uri": redirect_uri,
+                "code_verifier": code_verifier,
             },
         )
     
@@ -178,6 +208,7 @@ async def auth_callback(request: Request):
     
     # Clear the oauth_state cookie
     response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/")
+    response.delete_cookie(key=PKCE_VERIFIER_COOKIE, path="/")
     return response
 
 # Keycloak URL reachable from Docker for refresh token calls
