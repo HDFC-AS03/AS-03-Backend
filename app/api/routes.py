@@ -476,3 +476,29 @@ async def get_user_roles_api(
 ):
     roles = await app_admin_service.get_user_roles(user_id)
     return wrap_response(roles, message="User roles fetched successfully")
+#------------------------------------------
+# introspect
+#------------------------------------------
+@router.post("/introspect")
+async def introspect_token(
+    token: str,
+):
+    token_url = (
+        f"{settings.KEYCLOAK_SERVER_URL}/realms/"
+        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token/introspect"
+    )
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            token_url,
+            data={
+                "token": token,
+                "client_id": settings.KEYCLOAK_CLIENT_ID,
+                "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+            },
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Introspection failed")
+
+    return response.json()
