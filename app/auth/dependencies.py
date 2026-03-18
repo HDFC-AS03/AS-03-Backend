@@ -1,6 +1,7 @@
 from fastapi import Request, HTTPException, Depends
 import logging
 import json
+import time
 
 logger = logging.getLogger("auth")
 
@@ -8,42 +9,35 @@ logger = logging.getLogger("auth")
 ACCESS_TOKEN_COOKIE = "access_token"
 
 
-# async def get_bearer_user(request: Request):
-#     """
-#     Extract and validate JWT from:
-#     1. Authorization header (Bearer token) - for API clients
-#     2. httpOnly cookie (access_token) - for browser clients
-#     """
-#     token = None
-    
-#     # First, try Authorization header
-#     auth = request.headers.get("Authorization")
-#     if auth and auth.lower().startswith("bearer "):
-#         token = auth.split(" ", 1)[1]
-    
-#     # Fallback to httpOnly cookie
-#     if not token:
-#         token = request.cookies.get(ACCESS_TOKEN_COOKIE)
-
-#     if not token:
-#         return None
-
-#     try:
-#         claims = await validate_bearer_token(token)
-#         return {
-#             "sub": claims.get("sub"),
-#             "email": claims.get("email"),
-#             "preferred_username": claims.get("preferred_username"),
-#             "name": claims.get("name"),
-#             "roles": claims.get("realm_access", {}).get("roles", []),
-#             "exp": claims.get("exp"),
-#             "claims": claims,
-#         }
-#     except ValueError:
-#         return None
-
-
 async def get_gateway_user(request: Request):
+    """
+    Extract user information from gateway headers.
+    
+    🔐 SECURITY: The gateway MUST authenticate itself before we trust these headers.
+    Without this validation, anyone can spoof user identity.
+    
+    Attack scenario (BLOCKED):
+    - Attacker: curl -H "X-User-ID: admin" http://api/me
+    - Result: 401 Unauthorized (gateway not authenticated)
+    
+    Legitimate scenario (ALLOWED):
+    - Gateway: curl -H "X-User-ID: admin" -H "X-Gateway-Secret: <secret>" http://api/me
+    - Result: 200 OK (gateway authenticated, user returned)
+    """
+    from app.core.config import settings
+    
+    # 🔒 CRITICAL: Validate gateway authentication first
+    if settings.GATEWAY_SECRET:
+        gateway_secret = request.headers.get("X-Gateway-Secret")
+        if not gateway_secret or gateway_secret != settings.GATEWAY_SECRET:
+            # ❌ Gateway did not authenticate itself
+            # Don't trust these headers - reject immediately
+            logger.warning(f"Rejected request without valid gateway secret from {request.client}")
+            return None
+    else:
+        # Dev mode: no gateway secret configured
+        # In production, GATEWAY_SECRET MUST be set in environment
+        logger.warning("⚠️  No GATEWAY_SECRET configured - header spoofing possible!")
 
     user_id = request.headers.get("X-User-ID")
 

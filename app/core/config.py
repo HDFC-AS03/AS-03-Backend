@@ -15,6 +15,10 @@ class Settings(BaseSettings):
 
     FRONTEND_URL: str = "http://localhost:3000"
     GATEWAY_URL: str = "http://localhost"  # API gateway URL for OAuth callbacks
+    
+    # 🔐 CRITICAL: Gateway must authenticate itself with this secret
+    # Prevents header spoofing attacks
+    GATEWAY_SECRET: str | None = None  # Optional for dev, required for prod
 
     @property
     def metadata_url(self) -> str:

@@ -58,6 +58,7 @@ services:
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID}
       - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET}
+      - GATEWAY_SECRET=${GATEWAY_SECRET}
       - FRONTEND_URL=http://localhost:3000
       - GATEWAY_URL=http://localhost
       - ENV=dev
@@ -74,6 +75,8 @@ services:
     volumes:
       - ../gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
       - ../gateway/lua:/usr/local/openresty/nginx/lua
+    environment:
+      - GATEWAY_SECRET=${GATEWAY_SECRET}
     depends_on:
       - backend
     networks:
