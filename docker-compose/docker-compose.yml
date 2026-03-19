@@ -1,109 +1,104 @@
-version: "3.8"
-
 services:
-
-  postgres:
-    image: postgres:15
-    container_name: keycloak-postgres
-    environment:
-      POSTGRES_DB: keycloak
-      POSTGRES_USER: keycloak
-      POSTGRES_PASSWORD: keycloak
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - app-network
-
-keycloak:
-  image: quay.io/keycloak/keycloak:24.0.1
-  container_name: keycloak
-
-  command:
-    - start-dev
-    - --spi-theme-cache-themes=false
-    - --spi-theme-cache-templates=false
-    - --spi-theme-static-max-age=-1
-
-  volumes:
-    - ./theme:/opt/keycloak/themes
-
-  environment:
-    KC_DB: postgres
-    KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
-    KC_DB_USERNAME: keycloak
-    KC_DB_PASSWORD: keycloak
-    KEYCLOAK_ADMIN: superadmin
-    KEYCLOAK_ADMIN_PASSWORD: hdfcintern
-    KC_HOSTNAME: localhost
-    KC_HOSTNAME_PORT: "8080"
-    KC_HOSTNAME_STRICT: "false"
-    KC_HOSTNAME_STRICT_HTTPS: "false"
-
-  ports:
-    - "8080:8080"
-
-
   backend:
     build: ..
-    container_name: backend
+    container_name: backend-app1
+    profiles:
+      - app1
     ports:
       - "8000:8000"
     environment:
       - KEYCLOAK_SERVER_URL=http://keycloak:8080
       - KEYCLOAK_EXTERNAL_URL=http://localhost:8080
       - KEYCLOAK_REFRESH_URL=http://host.docker.internal:8080
-      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID}
+      - KEYCLOAK_CLIENT_ID=${APP2_KEYCLOAK_CLIENT_ID}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM}
-      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      - KEYCLOAK_CLIENT_SECRET=${APP2_KEYCLOAK_CLIENT_SECRET}
       - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID}
       - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET}
-      - FRONTEND_URL=http://localhost:3000
+      - FRONTEND_URL=http://localhost:5173
       - GATEWAY_URL=http://localhost
       - ENV=dev
-    depends_on:
-      - keycloak
     networks:
-      - app-network
-
-
-  gateway:
-    build: ../gateway
-    container_name: api-gateway
-    ports:
-      - "80:80"
-    volumes:
-      - ../gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
-      - ../gateway/lua:/usr/local/openresty/nginx/lua
-    depends_on:
       - backend
-    networks:
-      - app-network
+      - shared-auth-network
 
+  backend_app2:
+    build: ..
+    profiles:
+      - app2
+    ports:
+      - "8001:8000"
+    environment:
+      - KEYCLOAK_SERVER_URL=http://keycloak:8080
+      - KEYCLOAK_EXTERNAL_URL=http://localhost:8080
+      - KEYCLOAK_REFRESH_URL=http://host.docker.internal:8080
+      - KEYCLOAK_CLIENT_ID=App2-Frontend-Client
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
+      - KEYCLOAK_CLIENT_SECRET=${APP2_KEYCLOAK_CLIENT_SECRET}
+      - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID}
+      - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET}
+      - FRONTEND_URL=http://localhost:5173
+      - GATEWAY_URL=http://localhost/app2
+      - ENV=dev
+    networks:
+      backend:
+      shared-auth-network:
+        aliases:
+          - app2-backend
 
   mailhog:
     image: mailhog/mailhog
     container_name: mailhog
+    profiles:
+      - app1
     ports:
       - "1025:1025"
       - "8025:8025"
     networks:
-      - app-network
+      - backend
 
   frontend:
-    build:
-      context: ./AS-03-Frontend   # sibling folder at repo root
-    container_name: as03-frontend
+    image: node:20-alpine
+    container_name: frontend-app1
+    profiles:
+      - app1
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      - VITE_API_BASE=http://localhost
     ports:
-      - "3000:80"
+      - "5173:5173"
+    volumes:
+      - ../../Frontend:/app
+      - frontend_node_modules:/app/node_modules
     networks:
-      - app-network
+      - backend
+
+  frontend_app2:
+    image: node:20-alpine
+    profiles:
+      - app2
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      - VITE_API_BASE=http://localhost/app2
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../../Frontend:/app
+      - frontend2_node_modules:/app/node_modules
+    depends_on:
+      - backend_app2
+    networks:
+      - backend
 
 networks:
-  app-network:
+  backend:
     driver: bridge
-
+  shared-auth-network:
+    external: true
+    name: shared-auth-network
 
 volumes:
-  postgres_data:
+  frontend_node_modules:
+  frontend2_node_modules:

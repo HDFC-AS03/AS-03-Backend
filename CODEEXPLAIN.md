@@ -523,7 +523,7 @@ def wrap_response(
 
 ### NGINX Configuration
 
-**Location:** `gateway/nginx.conf`
+**Location:** `shared-infra/gateway/nginx.conf`
 
 ```nginx
 events {}
@@ -592,7 +592,7 @@ http {
 
 ### JWT Validator (Lua)
 
-**Location:** `gateway/lua/jwt_validator.lua`
+**Location:** `shared-infra/gateway/lua/jwt_validator.lua`
 
 This is the **security core** - RS256 signature verification using OpenSSL FFI.
 
