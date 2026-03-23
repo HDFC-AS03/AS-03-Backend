@@ -143,7 +143,6 @@ async def auth_callback(request: Request):
         raise HTTPException(status_code=400, detail="Missing PKCE verifier")
     
     # Exchange code for tokens
-    # redirect_uri = str(request.url_for("auth_callback"))
     redirect_uri = f"{settings.GATEWAY_URL}/callback"
     token_url = f"{settings.KEYCLOAK_SERVER_URL}/realms/{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
     

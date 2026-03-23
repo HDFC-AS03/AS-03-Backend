@@ -1,5 +1,8 @@
 services:
 
+  # ==========================================
+  # DATABASE
+  # ==========================================
   postgres:
     image: postgres:15
     container_name: keycloak-postgres
@@ -13,92 +16,164 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 
+  # ==========================================
+  # KEYCLOAK
+  # ==========================================
   keycloak:
     image: quay.io/keycloak/keycloak:24.0.1
     container_name: keycloak
-
     command:
       - start-dev
       - --spi-theme-cache-themes=false
       - --spi-theme-cache-templates=false
       - --spi-theme-static-max-age=-1
-
     volumes:
       - ./theme:/opt/keycloak/themes
-
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: keycloak
-
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
-
       KC_HOSTNAME: localhost
       KC_HOSTNAME_PORT: "8080"
       KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME_STRICT_HTTPS: "false"
-
     ports:
       - "8080:8080"
-
     depends_on:
-      - postgres
-
+      postgres:
+        condition: service_healthy
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health/ready || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
 
 
+  # ==========================================
+  # BACKEND (APP 1)
+  # ==========================================
   backend:
     build: ..
-    container_name: backend
+    container_name: backend-app1
+    profiles:
+      - app1
     ports:
       - "8000:8000"
-
     env_file:
       - .env
-
     environment:
-      ENV: ${ENV}
-      KEYCLOAK_SERVER_URL: http://keycloak:8080
-
+      - ENV=${ENV}
+      - KEYCLOAK_SERVER_URL=http://keycloak:8080
+      - KEYCLOAK_EXTERNAL_URL=http://localhost:8080
+      - KEYCLOAK_REFRESH_URL=http://host.docker.internal:8080
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID}
+      - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - GATEWAY_URL=${GATEWAY_URL}
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
+      - ACCESS_TOKEN_MAX_AGE=${ACCESS_TOKEN_MAX_AGE}
+      - REFRESH_TOKEN_MAX_AGE=${REFRESH_TOKEN_MAX_AGE}
+      - OAUTH_STATE_MAX_AGE=${OAUTH_STATE_MAX_AGE}
+      - JWKS_URL=${JWKS_URL}
+      - JWT_ISSUER_1=${JWT_ISSUER_1}
+      - JWT_ISSUER_2=${JWT_ISSUER_2}
+      - JWKS_CACHE_TTL=${JWKS_CACHE_TTL}
     depends_on:
-      - keycloak
-
+      keycloak:
+        condition: service_healthy
     networks:
       - app-network
 
+
+  # ==========================================
+  # BACKEND (APP 2)
+  # ==========================================
+  backend_app2:
+    build: ..
+    container_name: backend-app2
+    profiles:
+      - app2
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    environment:
+      - ENV=${ENV}
+      - KEYCLOAK_SERVER_URL=http://keycloak:8080
+      - KEYCLOAK_EXTERNAL_URL=http://localhost:8080
+      - KEYCLOAK_REFRESH_URL=http://host.docker.internal:8080
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
+      - KEYCLOAK_CLIENT_ID=${APP2_KEYCLOAK_CLIENT_ID}
+      - KEYCLOAK_CLIENT_SECRET=${APP2_KEYCLOAK_CLIENT_SECRET}
+      - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID}
+      - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - GATEWAY_URL=${GATEWAY_URL}/app2
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
+      - ACCESS_TOKEN_MAX_AGE=${ACCESS_TOKEN_MAX_AGE}
+      - REFRESH_TOKEN_MAX_AGE=${REFRESH_TOKEN_MAX_AGE}
+      - OAUTH_STATE_MAX_AGE=${OAUTH_STATE_MAX_AGE}
+      - JWKS_URL=${JWKS_URL}
+      - JWT_ISSUER_1=${JWT_ISSUER_1}
+      - JWT_ISSUER_2=${JWT_ISSUER_2}
+      - JWKS_CACHE_TTL=${JWKS_CACHE_TTL}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      app-network:
+        aliases:
+          - app2-backend
+
+
+  # ==========================================
+  # API GATEWAY
+  # ==========================================
   gateway:
     build: ../gateway
     container_name: api-gateway
     ports:
       - "80:80"
-
     volumes:
       - ../gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
       - ../gateway/lua:/usr/local/openresty/nginx/lua
-
     env_file:
       - .env
-
     environment:
-      JWKS_URL: ${JWKS_URL}
-      JWT_ISSUER_1: ${JWT_ISSUER_1}
-      JWT_ISSUER_2: ${JWT_ISSUER_2}
-      JWKS_CACHE_TTL: ${JWKS_CACHE_TTL}
-
+      - JWKS_URL=${JWKS_URL}
+      - JWT_ISSUER_1=${JWT_ISSUER_1}
+      - JWT_ISSUER_2=${JWT_ISSUER_2}
+      - JWKS_CACHE_TTL=${JWKS_CACHE_TTL}
     depends_on:
       - backend
-
     networks:
       - app-network
 
+
+  # ==========================================
+  # MAILHOG
+  # ==========================================
   mailhog:
     image: mailhog/mailhog
     container_name: mailhog
+    profiles:
+      - app1
     ports:
       - "1025:1025"
       - "8025:8025"
@@ -106,12 +181,48 @@ services:
       - app-network
 
 
+  # ==========================================
+  # FRONTEND (APP 1)
+  # ==========================================
   frontend:
-    build:
-      context: ../../AS-03-Frontend
-    container_name: as03-frontend
+    image: node:20-alpine
+    container_name: frontend-app1
+    profiles:
+      - app1
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      - VITE_API_BASE=http://localhost
     ports:
-      - "3000:80"
+      - "5173:5173"
+    volumes:
+      - ../../Frontend:/app
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      - gateway
+    networks:
+      - app-network
+
+
+  # ==========================================
+  # FRONTEND (APP 2)
+  # ==========================================
+  frontend_app2:
+    image: node:20-alpine
+    container_name: frontend-app2
+    profiles:
+      - app2
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      - VITE_API_BASE=http://localhost/app2
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../../Frontend:/app
+      - frontend2_node_modules:/app/node_modules
+    depends_on:
+      - backend_app2
     networks:
       - app-network
 
@@ -120,6 +231,7 @@ networks:
   app-network:
     driver: bridge
 
-
 volumes:
   postgres_data:
+  frontend_node_modules:
+  frontend2_node_modules:
