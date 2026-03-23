@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
 
   postgres:
@@ -16,33 +14,42 @@ services:
     networks:
       - app-network
 
-keycloak:
-  image: quay.io/keycloak/keycloak:24.0.1
-  container_name: keycloak
 
-  command:
-    - start-dev
-    - --spi-theme-cache-themes=false
-    - --spi-theme-cache-templates=false
-    - --spi-theme-static-max-age=-1
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.1
+    container_name: keycloak
 
-  volumes:
-    - ./theme:/opt/keycloak/themes
+    command:
+      - start-dev
+      - --spi-theme-cache-themes=false
+      - --spi-theme-cache-templates=false
+      - --spi-theme-static-max-age=-1
 
-  environment:
-    KC_DB: postgres
-    KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
-    KC_DB_USERNAME: keycloak
-    KC_DB_PASSWORD: keycloak
-    KEYCLOAK_ADMIN: superadmin
-    KEYCLOAK_ADMIN_PASSWORD: hdfcintern
-    KC_HOSTNAME: localhost
-    KC_HOSTNAME_PORT: "8080"
-    KC_HOSTNAME_STRICT: "false"
-    KC_HOSTNAME_STRICT_HTTPS: "false"
+    volumes:
+      - ./theme:/opt/keycloak/themes
 
-  ports:
-    - "8080:8080"
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak
+
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: "8080"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+
+    ports:
+      - "8080:8080"
+
+    depends_on:
+      - postgres
+
+    networks:
+      - app-network
 
 
   backend:
@@ -50,37 +57,44 @@ keycloak:
     container_name: backend
     ports:
       - "8000:8000"
+
+    env_file:
+      - .env
+
     environment:
-      - KEYCLOAK_SERVER_URL=http://keycloak:8080
-      - KEYCLOAK_EXTERNAL_URL=http://localhost:8080
-      - KEYCLOAK_REFRESH_URL=http://host.docker.internal:8080
-      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID}
-      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
-      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
-      - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID}
-      - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET}
-      - FRONTEND_URL=http://localhost:3000
-      - GATEWAY_URL=http://localhost
-      - ENV=dev
+      ENV: ${ENV}
+      KEYCLOAK_SERVER_URL: http://keycloak:8080
+
     depends_on:
       - keycloak
+
     networks:
       - app-network
-
 
   gateway:
     build: ../gateway
     container_name: api-gateway
     ports:
       - "80:80"
+
     volumes:
       - ../gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
       - ../gateway/lua:/usr/local/openresty/nginx/lua
+
+    env_file:
+      - .env
+
+    environment:
+      JWKS_URL: ${JWKS_URL}
+      JWT_ISSUER_1: ${JWT_ISSUER_1}
+      JWT_ISSUER_2: ${JWT_ISSUER_2}
+      JWKS_CACHE_TTL: ${JWKS_CACHE_TTL}
+
     depends_on:
       - backend
+
     networks:
       - app-network
-
 
   mailhog:
     image: mailhog/mailhog
@@ -91,14 +105,16 @@ keycloak:
     networks:
       - app-network
 
+
   frontend:
     build:
-      context: ./AS-03-Frontend   # sibling folder at repo root
+      context: ../../AS-03-Frontend
     container_name: as03-frontend
     ports:
       - "3000:80"
     networks:
       - app-network
+
 
 networks:
   app-network:

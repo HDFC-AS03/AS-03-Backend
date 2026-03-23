@@ -6,25 +6,29 @@ from app.core.response_wrapper import wrap_response
 from urllib.parse import urlencode
 import httpx
 import logging
-import os
 import secrets
 from app.services import app_admin_service
+import hashlib
+import base64
 
 router = APIRouter()
 
-# Cookie configuration
-ACCESS_TOKEN_COOKIE = "access_token"  # httpOnly cookie for access token
-REFRESH_TOKEN_COOKIE = "refresh_token"  # httpOnly cookie for refresh token
-CSRF_COOKIE_NAME = "csrf_token"
-OAUTH_STATE_COOKIE = "oauth_state"  # For PKCE/state during OAuth flow
-ACCESS_TOKEN_MAX_AGE = 60 * 5  # 5 minutes (short-lived)
-REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
-OAUTH_STATE_MAX_AGE = 60 * 5  # 5 minutes for OAuth state
-IS_PRODUCTION = os.getenv("ENV", "dev") == "production"
+# ==========================================
+# COOKIE CONFIGURATION (all from settings)
+# ==========================================
+ACCESS_TOKEN_COOKIE  = "access_token"
+REFRESH_TOKEN_COOKIE = "refresh_token"
+CSRF_COOKIE_NAME     = "csrf_token"
+OAUTH_STATE_COOKIE   = "oauth_state"
+PKCE_VERIFIER_COOKIE = "pkce_verifier"
 
-# Always use httpOnly cookies for security (enterprise pattern)
-USE_HTTPONLY_COOKIES = True
-
+# Single source of truth — everything from .env via settings
+ACCESS_TOKEN_MAX_AGE  = settings.ACCESS_TOKEN_MAX_AGE
+REFRESH_TOKEN_MAX_AGE = settings.REFRESH_TOKEN_MAX_AGE
+OAUTH_STATE_MAX_AGE   = settings.OAUTH_STATE_MAX_AGE
+IS_PRODUCTION         = settings.is_production
+KEYCLOAK_EXTERNAL_URL = settings.KEYCLOAK_EXTERNAL_URL
+KEYCLOAK_REFRESH_URL  = settings.KEYCLOAK_REFRESH_URL
 
 def generate_csrf_token() -> str:
     """Generate a cryptographically secure CSRF token."""
@@ -56,8 +60,7 @@ async def validate_csrf(
 async def root():
     return {"message": "Auth Service Running"}
 
-# External Keycloak URL for browser redirects
-KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:8080")
+
 
 
 @router.get("/login")
@@ -65,6 +68,12 @@ async def login(request: Request):
     """Initiate OAuth flow - stateless using cookie for state storage."""
     # Generate cryptographic state for CSRF protection
     state = secrets.token_urlsafe(32)
+
+    # PKCE generation
+    code_verifier = secrets.token_urlsafe(64)
+
+    challenge = hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = base64.urlsafe_b64encode(challenge).decode().rstrip("=")
     
     # Build callback URL using gateway URL (must match Keycloak valid redirect URIs)
     redirect_uri = f"{settings.GATEWAY_URL}/callback"
@@ -76,11 +85,23 @@ async def login(request: Request):
         "response_type": "code",
         "scope": "openid email profile",
         "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     })
     auth_url = f"{KEYCLOAK_EXTERNAL_URL}/realms/{settings.KEYCLOAK_REALM}/protocol/openid-connect/auth?{auth_params}"
     
     # Set state in cookie and redirect
     response = RedirectResponse(url=auth_url)
+    # Store PKCE verifier
+    response.set_cookie(
+        key=PKCE_VERIFIER_COOKIE,
+        value=code_verifier,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        max_age=OAUTH_STATE_MAX_AGE,
+        path="/",
+    )
     response.set_cookie(
         key=OAUTH_STATE_COOKIE,
         value=state,
@@ -113,9 +134,17 @@ async def auth_callback(request: Request):
         raise HTTPException(status_code=400, detail="Missing OAuth state cookie")
     if not secrets.compare_digest(stored_state, state):
         raise HTTPException(status_code=400, detail="Invalid state - possible CSRF attack")
+
+
+    # Retrieve PKCE verifier
+    code_verifier = request.cookies.get(PKCE_VERIFIER_COOKIE)
+
+    if not code_verifier:
+        raise HTTPException(status_code=400, detail="Missing PKCE verifier")
     
     # Exchange code for tokens
-    redirect_uri = str(request.url_for("auth_callback"))
+    # redirect_uri = str(request.url_for("auth_callback"))
+    redirect_uri = f"{settings.GATEWAY_URL}/callback"
     token_url = f"{settings.KEYCLOAK_SERVER_URL}/realms/{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
     
     async with httpx.AsyncClient(timeout=10) as client:
@@ -127,6 +156,7 @@ async def auth_callback(request: Request):
                 "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
                 "code": code,
                 "redirect_uri": redirect_uri,
+                "code_verifier": code_verifier,
             },
         )
     
@@ -178,13 +208,11 @@ async def auth_callback(request: Request):
     
     # Clear the oauth_state cookie
     response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/")
+    response.delete_cookie(key=PKCE_VERIFIER_COOKIE, path="/")
     return response
 
-
-# External Keycloak URL for browser redirects
-KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:8080")
 # Keycloak URL reachable from Docker for refresh token calls
-KEYCLOAK_REFRESH_URL = os.getenv("KEYCLOAK_REFRESH_URL", "http://host.docker.internal:8080")
+KEYCLOAK_REFRESH_URL = settings.KEYCLOAK_REFRESH_URL
 
 @router.get("/logout")
 async def logout():
@@ -243,7 +271,7 @@ async def get_current_user(user: dict = Depends(require_auth)):
     return wrap_response(
         user_data,
         message="User information retrieved successfully",
-        ttl=300,
+        ttl=settings.ACCESS_TOKEN_MAX_AGE,
     )
 
 
@@ -479,3 +507,29 @@ async def get_user_roles_api(
 ):
     roles = await app_admin_service.get_user_roles(user_id)
     return wrap_response(roles, message="User roles fetched successfully")
+#------------------------------------------
+# introspect
+#------------------------------------------
+@router.post("/introspect")
+async def introspect_token(
+    token: str,
+):
+    token_url = (
+        f"{settings.KEYCLOAK_SERVER_URL}/realms/"
+        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token/introspect"
+    )
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            token_url,
+            data={
+                "token": token,
+                "client_id": settings.KEYCLOAK_CLIENT_ID,
+                "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+            },
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Introspection failed")
+
+    return response.json()
