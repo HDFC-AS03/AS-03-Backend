@@ -91,10 +91,10 @@ async def require_auth(user: dict = Depends(get_gateway_user)):
 
 #     def checker(user: dict = Depends(require_auth)):
 
-#         # 1️⃣ Realm roles
+#         # 1️ Realm roles
 #         realm_roles = user.get("roles", []) or []
 
-#         # 2️⃣ Client roles (if bearer token with claims)
+#         # 2️ Client roles (if bearer token with claims)
 #         client_roles = []
 #         claims = user.get("claims") or {}
 
@@ -103,7 +103,7 @@ async def require_auth(user: dict = Depends(get_gateway_user)):
 #             for client_data in resource_access.values():
 #                 client_roles.extend(client_data.get("roles", []))
 
-#         # 3️⃣ Combine roles
+#         # 3️ Combine roles
 #         all_roles = set(realm_roles + client_roles)
 
 #         if role not in all_roles:
