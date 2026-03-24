@@ -66,52 +66,82 @@ KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:808
 @router.get("/login")
 async def login(request: Request):
     """Initiate OAuth flow - stateless using cookie for state storage."""
-    # Generate cryptographic state for CSRF protection
-    state = secrets.token_urlsafe(32)
 
-    # PKCE generation
-    code_verifier = secrets.token_urlsafe(64)
+    audit_logger.info(
+        "Login attempt",
+        extra={
+            "endpoint": "/login",
+            "ip": request.client.host,
+        },
+    )
 
-    challenge = hashlib.sha256(code_verifier.encode()).digest()
-    code_challenge = base64.urlsafe_b64encode(challenge).decode().rstrip("=")
-    
-    # Build callback URL using gateway URL (must match Keycloak valid redirect URIs)
-    redirect_uri = f"{settings.GATEWAY_URL}/callback"
-    
-    # Build Keycloak authorization URL
-    auth_params = urlencode({
-        "client_id": settings.KEYCLOAK_CLIENT_ID,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": "openid email profile",
-        "state": state,
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-    })
-    auth_url = f"{KEYCLOAK_EXTERNAL_URL}/realms/{settings.KEYCLOAK_REALM}/protocol/openid-connect/auth?{auth_params}"
-    
-    # Set state in cookie and redirect
-    response = RedirectResponse(url=auth_url)
-    # Store PKCE verifier
-    response.set_cookie(
-        key=PKCE_VERIFIER_COOKIE,
-        value=code_verifier,
-        httponly=True,
-        secure=IS_PRODUCTION,
-        samesite="lax",
-        max_age=OAUTH_STATE_MAX_AGE,
-        path="/",
-    )
-    response.set_cookie(
-        key=OAUTH_STATE_COOKIE,
-        value=state,
-        httponly=True,
-        secure=IS_PRODUCTION,
-        samesite="lax",
-        max_age=OAUTH_STATE_MAX_AGE,
-        path="/",
-    )
-    return response
+    try:
+        # Generate cryptographic state for CSRF protection
+        state = secrets.token_urlsafe(32)
+
+        # PKCE generation
+        code_verifier = secrets.token_urlsafe(64)
+
+        challenge = hashlib.sha256(code_verifier.encode()).digest()
+        code_challenge = base64.urlsafe_b64encode(challenge).decode().rstrip("=")
+        
+        # Build callback URL using gateway URL (must match Keycloak valid redirect URIs)
+        redirect_uri = f"{settings.GATEWAY_URL}/callback"
+        
+        # Build Keycloak authorization URL
+        auth_params = urlencode({
+            "client_id": settings.KEYCLOAK_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        })
+        auth_url = f"{KEYCLOAK_EXTERNAL_URL}/realms/{settings.KEYCLOAK_REALM}/protocol/openid-connect/auth?{auth_params}"
+        
+        # Set state in cookie and redirect
+        response = RedirectResponse(url=auth_url)
+        # Store PKCE verifier
+        response.set_cookie(
+            key=PKCE_VERIFIER_COOKIE,
+            value=code_verifier,
+            httponly=True,
+            secure=IS_PRODUCTION,
+            samesite="lax",
+            max_age=OAUTH_STATE_MAX_AGE,
+            path="/",
+        )
+        response.set_cookie(
+            key=OAUTH_STATE_COOKIE,
+            value=state,
+            httponly=True,
+            secure=IS_PRODUCTION,
+            samesite="lax",
+            max_age=OAUTH_STATE_MAX_AGE,
+            path="/",
+        )
+
+        audit_logger.info(
+            "Login redirect to Keycloak",
+            extra={
+                "endpoint": "/login",
+                "ip": request.client.host,
+            },
+        )
+
+        return response
+
+    except Exception as e:
+        audit_logger.error(
+            "Login failed",
+            extra={
+                "endpoint": "/login",
+                "ip": request.client.host,
+                "error": str(e),
+            },
+        )
+        raise
 
 
 @router.get("/callback", name="auth_callback")
@@ -121,8 +151,26 @@ async def auth_callback(request: Request):
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     error = request.query_params.get("error")
+
+    audit_logger.info(
+        "OAuth callback received",
+        extra={
+            "endpoint": "/callback",
+            "ip": request.client.host,
+            "has_code": bool(code),
+            "has_state": bool(state),
+        },
+    )
     
     if error:
+        audit_logger.error(
+            "OAuth callback error",
+            extra={
+                "endpoint": "/callback",
+                "ip": request.client.host,
+                "error": error,
+            },
+        )
         raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
     
     if not code or not state:
@@ -161,7 +209,7 @@ async def auth_callback(request: Request):
         )
     
     if token_response.status_code != 200:
-        logging.error(f"Token exchange failed: {token_response.status_code} {token_response.text}")
+        audit_logger.error(f"Token exchange failed: {token_response.status_code} {token_response.text}")
         raise HTTPException(status_code=401, detail="Token exchange failed")
     
     tokens = token_response.json()
@@ -218,7 +266,14 @@ KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:808
 KEYCLOAK_REFRESH_URL = os.getenv("KEYCLOAK_REFRESH_URL", "http://host.docker.internal:8080")
 
 @router.get("/logout")
-async def logout():
+async def logout(request: Request):
+    audit_logger.info(
+        "Logout initiated",
+        extra={
+            "endpoint": "/logout",
+            "ip": request.client.host,
+        },
+    )
     """Logout: clear all auth cookies and redirect to Keycloak logout."""
     logout_url = (
         f"{KEYCLOAK_EXTERNAL_URL}/realms/"
@@ -261,7 +316,21 @@ async def logout():
 
 
 @router.get("/me")
-async def get_current_user(user: dict = Depends(require_auth)):
+async def get_current_user(
+    request: Request,  
+    user: dict = Depends(require_auth)
+):
+    audit_logger.info(
+        "API request",
+        extra={
+            "method": request.method,
+            "endpoint": request.url.path,
+            "status_code": 200,
+            "ip": request.client.host,
+            "user_id": user.get("sub"),  
+            "preferred_username": user.get("preferred_username"),  
+        },
+    )
     user_data = {
         "sub": user.get("sub"),
         "email": user.get("email"),
@@ -295,79 +364,109 @@ async def refresh_token(
     response: Response,
     _csrf: bool = Depends(validate_csrf),
 ):
-    """
-    Refresh access token using httpOnly refresh_token cookie.
-    Returns new access_token in httpOnly cookie (browser) or JSON (API clients).
-    """
-    # Read refresh_token from httpOnly cookie
-    refresh_token_value = request.cookies.get(REFRESH_TOKEN_COOKIE)
-    if not refresh_token_value:
-        raise HTTPException(status_code=401, detail="No refresh token cookie")
-
-    # Use KEYCLOAK_REFRESH_URL - backend can reach host.docker.internal:8080
-    token_url = (
-        f"{KEYCLOAK_REFRESH_URL}/realms/"
-        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
+    audit_logger.info(
+        "Refresh attempt",
+        extra={
+            "endpoint": "/refresh",
+            "ip": request.client.host,
+        },
     )
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        keycloak_response = await client.post(
-            token_url,
-            data={
-                "grant_type": "refresh_token",
-                "client_id": settings.KEYCLOAK_CLIENT_ID,
-                "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
-                "refresh_token": refresh_token_value,
-            },
+    
+    try:
+        """
+        Refresh access token using httpOnly refresh_token cookie.
+        Returns new access_token in httpOnly cookie (browser) or JSON (API clients).
+        """
+        # Read refresh_token from httpOnly cookie
+        refresh_token_value = request.cookies.get(REFRESH_TOKEN_COOKIE)
+        if not refresh_token_value:
+            raise HTTPException(status_code=401, detail="No refresh token cookie")
+
+        # Use KEYCLOAK_REFRESH_URL - backend can reach host.docker.internal:8080
+        token_url = (
+            f"{KEYCLOAK_REFRESH_URL}/realms/"
+            f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
         )
 
-    if keycloak_response.status_code != 200:
-        logging.warning(f"Refresh failed: {keycloak_response.status_code}")
-        # Clear invalid cookies
-        response.delete_cookie(key=ACCESS_TOKEN_COOKIE, path="/")
-        response.delete_cookie(key=REFRESH_TOKEN_COOKIE, path="/")
-        raise HTTPException(status_code=401, detail="Refresh token expired or invalid")
+        async with httpx.AsyncClient(timeout=10) as client:
+            keycloak_response = await client.post(
+                token_url,
+                data={
+                    "grant_type": "refresh_token",
+                    "client_id": settings.KEYCLOAK_CLIENT_ID,
+                    "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+                    "refresh_token": refresh_token_value,
+                },
+            )
 
-    new_tokens = keycloak_response.json()
-    new_access_token = new_tokens.get("access_token")
-    new_refresh_token = new_tokens.get("refresh_token")
-    
-    # Update access_token cookie
-    response.set_cookie(
-        key=ACCESS_TOKEN_COOKIE,
-        value=new_access_token,
-        httponly=True,
-        secure=IS_PRODUCTION,
-        samesite="lax",
-        max_age=ACCESS_TOKEN_MAX_AGE,
-        path="/",
-    )
-    
-    # Update refresh_token cookie (token rotation)
-    if new_refresh_token:
+        if keycloak_response.status_code != 200:
+            audit_logger.warning(f"Refresh failed: {keycloak_response.status_code}")
+            # Clear invalid cookies
+            response.delete_cookie(key=ACCESS_TOKEN_COOKIE, path="/")
+            response.delete_cookie(key=REFRESH_TOKEN_COOKIE, path="/")
+            raise HTTPException(status_code=401, detail="Refresh token expired or invalid")
+
+        new_tokens = keycloak_response.json()
+        new_access_token = new_tokens.get("access_token")
+        new_refresh_token = new_tokens.get("refresh_token")
+        
+        # Update access_token cookie
         response.set_cookie(
-            key=REFRESH_TOKEN_COOKIE,
-            value=new_refresh_token,
+            key=ACCESS_TOKEN_COOKIE,
+            value=new_access_token,
             httponly=True,
+            secure=IS_PRODUCTION,
+            samesite="lax",
+            max_age=ACCESS_TOKEN_MAX_AGE,
+            path="/",
+        )
+        
+        # Update refresh_token cookie (token rotation)
+        if new_refresh_token:
+            response.set_cookie(
+                key=REFRESH_TOKEN_COOKIE,
+                value=new_refresh_token,
+                httponly=True,
+                secure=IS_PRODUCTION,
+                samesite="lax",
+                max_age=REFRESH_TOKEN_MAX_AGE,
+                path="/",
+            )
+        
+        # Rotate CSRF token on successful refresh
+        new_csrf = generate_csrf_token()
+        response.set_cookie(
+            key=CSRF_COOKIE_NAME,
+            value=new_csrf,
+            httponly=False,
             secure=IS_PRODUCTION,
             samesite="lax",
             max_age=REFRESH_TOKEN_MAX_AGE,
             path="/",
         )
-    
-    # Rotate CSRF token on successful refresh
-    new_csrf = generate_csrf_token()
-    response.set_cookie(
-        key=CSRF_COOKIE_NAME,
-        value=new_csrf,
-        httponly=False,
-        secure=IS_PRODUCTION,
-        samesite="lax",
-        max_age=REFRESH_TOKEN_MAX_AGE,
-        path="/",
-    )
-    
-    return {"success": True, "message": "Token refreshed"}
+
+        audit_logger.info(
+            "Token refreshed successfully",
+            extra={
+                "endpoint": "/refresh",
+                "ip": request.client.host,
+                "status_code": 200,
+            },
+        )
+
+        return {"success": True, "message": "Token refreshed"}
+
+    except HTTPException as e:
+        audit_logger.error(
+            "Refresh failed",
+            extra={
+                "endpoint": "/refresh",
+                "ip": request.client.host,
+                "status_code": e.status_code,
+            },
+        )
+        raise
 
 
 
@@ -379,7 +478,21 @@ async def bulk_users(
     payload: list[dict],
     user: dict = Depends(require_role("admin"))
 ):
+    audit_logger.info(
+        "Bulk user creation attempt",
+        extra={
+            "admin_id": user.get("sub"),
+            "count": len(payload),
+        },
+    )
     result = await app_admin_service.bulk_create_users(payload)
+    audit_logger.info(
+        "Bulk user creation success",
+        extra={
+            "admin_id": user.get("sub"),
+            "count": len(payload),
+        },
+    )
     return wrap_response(result, message="Bulk user operation completed")
 
 
@@ -391,7 +504,24 @@ async def remove_user(
     user_id: str,
     user: dict = Depends(require_role("admin"))
 ):
+
+    audit_logger.info(
+        "User deletion attempt",
+        extra={
+            "admin_id": user.get("sub"),
+            "target_user": user_id,
+        },
+    )
+
     await app_admin_service.delete_user(user_id)
+
+    audit_logger.info(
+        "User deleted successfully",
+        extra={
+            "admin_id": user.get("sub"),
+            "target_user": user_id,
+        },
+    )
     return wrap_response({}, message="User deleted successfully")
 
 
@@ -400,8 +530,19 @@ async def remove_user(
 # -------------------------
 @router.get("/admin/users")
 async def view_users(
+    request: Request,
     user: dict = Depends(require_role("admin"))
 ):
+    audit_logger.info(
+        "View users",
+        extra={
+            "method": request.method,
+            "endpoint": request.url.path,
+            "admin_id": user.get("sub"),
+            "preferred_username": user.get("preferred_username"),  # 👈 ADD
+            "ip": request.client.host,
+        },
+    )
     # Fetch all users from Keycloak (includes those without roles)
     all_users = await app_admin_service.get_all_users()
     
@@ -415,20 +556,66 @@ async def view_users(
 # -------------------------
 # ASSIGN ROLE
 # -------------------------
+audit_logger = logging.getLogger("audit")
+
+
 @router.post("/admin/users/{user_id}/roles")
 async def assign_role_api(
     user_id: str,
     role_name: str,
+    request: Request,
     user: dict = Depends(require_role("admin"))
 ):
 
-    await app_admin_service.assign_role(
-        user_id,
-        role_name,
-        settings.KEYCLOAK_CLIENT_ID
+    # 🔹 BEFORE → intent
+    audit_logger.info(
+        "Role assignment attempt",
+        extra={
+            "admin_id": user.get("sub"),
+            "target_user": user_id,
+            "role": role_name,
+            "endpoint": request.url.path,
+            "method": request.method,
+            "ip": request.client.host,
+        },
     )
 
-    return wrap_response({}, message="Role assigned successfully")
+    try:
+        # 🔹 MAIN ACTION (only once)
+        await app_admin_service.assign_role(
+            user_id,
+            role_name,
+            settings.KEYCLOAK_CLIENT_ID
+        )
+
+        # 🔹 SUCCESS
+        audit_logger.info(
+            "Role assigned successfully",
+            extra={
+                "admin_id": user.get("sub"),
+                "target_user": user_id,
+                "role": role_name,
+                "status_code": 200,
+            },
+        )
+
+        return wrap_response({}, message="Role assigned successfully")
+
+    except Exception as e:
+        # 🔹 FAILURE
+        audit_logger.error(
+            "Role assignment failed",
+            extra={
+                "admin_id": user.get("sub"),
+                "target_user": user_id,
+                "role": role_name,
+                "endpoint": request.url.path,
+                "method": request.method,
+                "ip": request.client.host,
+                "error": str(e),
+            },
+        )
+        raise
 
 
 # -------------------------
@@ -441,10 +628,24 @@ async def remove_role_api(
     user: dict = Depends(require_role("admin"))
 ):
 
-    await app_admin_service.remove_role(
-        user_id,
-        role_name,
-        settings.KEYCLOAK_CLIENT_ID
+    audit_logger.info(
+        "Role removal attempt",
+        extra={
+            "admin_id": user.get("sub"),
+            "target_user": user_id,
+            "role": role_name,
+        },
+    )
+
+    await app_admin_service.remove_role(user_id, role_name, settings.KEYCLOAK_CLIENT_ID)
+
+    audit_logger.info(
+        "Role removed successfully",
+        extra={
+            "admin_id": user.get("sub"),
+            "target_user": user_id,
+            "role": role_name,
+        },
     )
 
     return wrap_response({}, message="Role removed successfully")
@@ -461,11 +662,26 @@ async def update_role_api(
     user: dict = Depends(require_role("admin"))
 ):
 
-    await app_admin_service.update_role(
-        user_id,
-        old_role,
-        new_role,
-        settings.KEYCLOAK_CLIENT_ID
+    audit_logger.info(
+        "Role update attempt",
+        extra={
+            "admin_id": user.get("sub"),
+            "target_user": user_id,
+            "old_role": old_role,
+            "new_role": new_role,
+        },
+    )
+
+    await app_admin_service.update_role(user_id, old_role, new_role, settings.KEYCLOAK_CLIENT_ID)
+
+    audit_logger.info(
+        "Role updated successfully",
+        extra={
+            "admin_id": user.get("sub"),
+            "target_user": user_id,
+            "old_role": old_role,
+            "new_role": new_role,
+        },
     )
 
     return wrap_response({}, message="Role updated successfully")
@@ -495,7 +711,7 @@ async def redirect_to_admin_console(
 ):
     admin_console_url = (
         f"{KEYCLOAK_EXTERNAL_URL}/admin/"
-        f"{settings.KEYCLOAK_REALM}/console"
+        f"{settings.KEYCLOAK_REALM}/console/"
     )
 
     return RedirectResponse(admin_console_url)
@@ -508,5 +724,13 @@ async def get_user_roles_api(
     user_id: str,
     user: dict = Depends(require_role("admin"))
 ):
+
+    audit_logger.info(
+        "Fetch user roles",
+        extra={
+            "admin_id": user.get("sub"),
+            "target_user": user_id,
+        },
+    )
     roles = await app_admin_service.get_user_roles(user_id)
     return wrap_response(roles, message="User roles fetched successfully")
