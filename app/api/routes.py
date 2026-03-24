@@ -70,8 +70,11 @@ async def login(request: Request):
     audit_logger.info(
         "Login attempt",
         extra={
+            "event": "login_attempt",
             "endpoint": "/login",
+            "method": request.method,
             "ip": request.client.host,
+            "success": True
         },
     )
 
@@ -125,8 +128,11 @@ async def login(request: Request):
         audit_logger.info(
             "Login redirect to Keycloak",
             extra={
+                "event": "login_redirect",
                 "endpoint": "/login",
+                "method": request.method,
                 "ip": request.client.host,
+                "success": True,
             },
         )
 
@@ -136,8 +142,11 @@ async def login(request: Request):
         audit_logger.error(
             "Login failed",
             extra={
+                "event": "error",
                 "endpoint": "/login",
+                "method": request.method,
                 "ip": request.client.host,
+                "success": False,
                 "error": str(e),
             },
         )
@@ -155,10 +164,13 @@ async def auth_callback(request: Request):
     audit_logger.info(
         "OAuth callback received",
         extra={
+            "event": "login_success",
             "endpoint": "/callback",
+            "method": request.method,
             "ip": request.client.host,
             "has_code": bool(code),
             "has_state": bool(state),
+            "success": True,
         },
     )
     
@@ -166,8 +178,11 @@ async def auth_callback(request: Request):
         audit_logger.error(
             "OAuth callback error",
             extra={
+                "event": "error",
                 "endpoint": "/callback",
+                "method": request.method,
                 "ip": request.client.host,
+                "success": False,
                 "error": error,
             },
         )
@@ -209,7 +224,17 @@ async def auth_callback(request: Request):
         )
     
     if token_response.status_code != 200:
-        audit_logger.error(f"Token exchange failed: {token_response.status_code} {token_response.text}")
+        audit_logger.error(
+            "Token exchange failed",
+            extra={
+                "event": "error",
+                "endpoint": "/callback",
+                "method": request.method,
+                "status_code": token_response.status_code,
+                "success": False,
+                "error": token_response.text,
+            },
+        )
         raise HTTPException(status_code=401, detail="Token exchange failed")
     
     tokens = token_response.json()
@@ -270,8 +295,11 @@ async def logout(request: Request):
     audit_logger.info(
         "Logout initiated",
         extra={
+            "event": "logout",
             "endpoint": "/logout",
+            "method": request.method,
             "ip": request.client.host,
+            "success": True,
         },
     )
     """Logout: clear all auth cookies and redirect to Keycloak logout."""
@@ -321,14 +349,15 @@ async def get_current_user(
     user: dict = Depends(require_auth)
 ):
     audit_logger.info(
-        "API request",
+        "User info accessed",
         extra={
-            "method": request.method,
+            "event": "user_activity",
             "endpoint": request.url.path,
+            "method": request.method,
             "status_code": 200,
             "ip": request.client.host,
-            "user_id": user.get("sub"),  
-            "preferred_username": user.get("preferred_username"),  
+            "user_id": user.get("sub"),
+            "success": True,
         },
     )
     user_data = {
@@ -367,8 +396,11 @@ async def refresh_token(
     audit_logger.info(
         "Refresh attempt",
         extra={
+            "event": "token_refresh",
             "endpoint": "/refresh",
+            "method": request.method,
             "ip": request.client.host,
+            "success": True,
         },
     )
 
@@ -381,6 +413,18 @@ async def refresh_token(
         # Read refresh_token from httpOnly cookie
         refresh_token_value = request.cookies.get(REFRESH_TOKEN_COOKIE)
         if not refresh_token_value:
+            audit_logger.error(
+                "Refresh failed - no cookie",
+                extra={
+                    "event": "error",
+                    "endpoint": "/refresh",
+                    "method": request.method,
+                    "ip": request.client.host,
+                    "status_code": 401,
+                    "success": False,
+                    "error": "No refresh token cookie",
+                },
+            )
             raise HTTPException(status_code=401, detail="No refresh token cookie")
 
         # Use KEYCLOAK_REFRESH_URL - backend can reach host.docker.internal:8080
@@ -401,7 +445,18 @@ async def refresh_token(
             )
 
         if keycloak_response.status_code != 200:
-            audit_logger.warning(f"Refresh failed: {keycloak_response.status_code}")
+            audit_logger.error(
+                "Refresh failed - invalid/expired token",
+                extra={
+                    "event": "error",
+                    "endpoint": "/refresh",
+                    "method": request.method,
+                    "ip": request.client.host,
+                    "status_code": keycloak_response.status_code,
+                    "success": False,
+                    "error": keycloak_response.text,
+                },
+            )
             # Clear invalid cookies
             response.delete_cookie(key=ACCESS_TOKEN_COOKIE, path="/")
             response.delete_cookie(key=REFRESH_TOKEN_COOKIE, path="/")
@@ -449,9 +504,12 @@ async def refresh_token(
         audit_logger.info(
             "Token refreshed successfully",
             extra={
+                "event": "token_refresh",
                 "endpoint": "/refresh",
-                "ip": request.client.host,
+                "method": request.method,
                 "status_code": 200,
+                "ip": request.client.host,
+                "success": True,
             },
         )
 
@@ -461,9 +519,13 @@ async def refresh_token(
         audit_logger.error(
             "Refresh failed",
             extra={
+                "event": "error",
                 "endpoint": "/refresh",
-                "ip": request.client.host,
+                "method": request.method,
                 "status_code": e.status_code,
+                "ip": request.client.host,
+                "success": False,
+                "error": str(e.detail),
             },
         )
         raise
@@ -481,16 +543,22 @@ async def bulk_users(
     audit_logger.info(
         "Bulk user creation attempt",
         extra={
+            "event": "admin_action",
+            "action": "bulk_create_users",
             "admin_id": user.get("sub"),
             "count": len(payload),
+            "success": True,
         },
     )
     result = await app_admin_service.bulk_create_users(payload)
     audit_logger.info(
         "Bulk user creation success",
         extra={
+            "event": "admin_action",
+            "action": "bulk_create_users",
             "admin_id": user.get("sub"),
             "count": len(payload),
+            "success": True,
         },
     )
     return wrap_response(result, message="Bulk user operation completed")
@@ -508,8 +576,11 @@ async def remove_user(
     audit_logger.info(
         "User deletion attempt",
         extra={
+            "event": "admin_action",
+            "action": "delete_user",
             "admin_id": user.get("sub"),
             "target_user": user_id,
+            "success": True,
         },
     )
 
@@ -518,8 +589,11 @@ async def remove_user(
     audit_logger.info(
         "User deleted successfully",
         extra={
+            "event": "admin_action",
+            "action": "delete_user",
             "admin_id": user.get("sub"),
             "target_user": user_id,
+            "success": True,
         },
     )
     return wrap_response({}, message="User deleted successfully")
@@ -536,11 +610,13 @@ async def view_users(
     audit_logger.info(
         "View users",
         extra={
+            "event": "admin_action",
+            "action": "view_users",
             "method": request.method,
             "endpoint": request.url.path,
             "admin_id": user.get("sub"),
-            "preferred_username": user.get("preferred_username"),  # 👈 ADD
             "ip": request.client.host,
+            "success": True,
         },
     )
     # Fetch all users from Keycloak (includes those without roles)
@@ -571,12 +647,15 @@ async def assign_role_api(
     audit_logger.info(
         "Role assignment attempt",
         extra={
+            "event": "admin_action",
+            "action": "assign_role",
             "admin_id": user.get("sub"),
             "target_user": user_id,
             "role": role_name,
             "endpoint": request.url.path,
             "method": request.method,
             "ip": request.client.host,
+            "success": True,
         },
     )
 
@@ -592,10 +671,13 @@ async def assign_role_api(
         audit_logger.info(
             "Role assigned successfully",
             extra={
+                "event": "admin_action",
+                "action": "assign_role",
                 "admin_id": user.get("sub"),
                 "target_user": user_id,
                 "role": role_name,
                 "status_code": 200,
+                "success": True,
             },
         )
 
@@ -606,12 +688,15 @@ async def assign_role_api(
         audit_logger.error(
             "Role assignment failed",
             extra={
+                "event": "error",
+                "action": "assign_role",
                 "admin_id": user.get("sub"),
                 "target_user": user_id,
                 "role": role_name,
                 "endpoint": request.url.path,
                 "method": request.method,
                 "ip": request.client.host,
+                "success": False,
                 "error": str(e),
             },
         )
@@ -631,9 +716,12 @@ async def remove_role_api(
     audit_logger.info(
         "Role removal attempt",
         extra={
+            "event": "admin_action",
+            "action": "remove_role",
             "admin_id": user.get("sub"),
             "target_user": user_id,
             "role": role_name,
+            "success": True,
         },
     )
 
@@ -642,9 +730,12 @@ async def remove_role_api(
     audit_logger.info(
         "Role removed successfully",
         extra={
+            "event": "admin_action",
+            "action": "remove_role",
             "admin_id": user.get("sub"),
             "target_user": user_id,
             "role": role_name,
+            "success": True,
         },
     )
 
@@ -665,10 +756,13 @@ async def update_role_api(
     audit_logger.info(
         "Role update attempt",
         extra={
+            "event": "admin_action",
+            "action": "update_role",
             "admin_id": user.get("sub"),
             "target_user": user_id,
             "old_role": old_role,
             "new_role": new_role,
+            "success": True,
         },
     )
 
@@ -677,10 +771,13 @@ async def update_role_api(
     audit_logger.info(
         "Role updated successfully",
         extra={
+            "event": "admin_action",
+            "action": "update_role",
             "admin_id": user.get("sub"),
             "target_user": user_id,
             "old_role": old_role,
             "new_role": new_role,
+            "success": True,
         },
     )
 
@@ -728,8 +825,11 @@ async def get_user_roles_api(
     audit_logger.info(
         "Fetch user roles",
         extra={
+            "event": "admin_action",
+            "action": "get_user_roles",
             "admin_id": user.get("sub"),
             "target_user": user_id,
+            "success": True,
         },
     )
     roles = await app_admin_service.get_user_roles(user_id)

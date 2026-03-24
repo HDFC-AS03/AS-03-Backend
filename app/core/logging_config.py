@@ -36,23 +36,16 @@ class JsonFormatter(logging.Formatter):
 def setup_logging():
     formatter = JsonFormatter()
 
-    # Ensure logs directory exists
-    os.makedirs("/app/logs", exist_ok=True)
-
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
-
-    # File handler (IMPORTANT)
-    file_handler = logging.FileHandler("/app/logs/audit.log")
-    file_handler.setFormatter(formatter)
 
     # Root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
 
     # 🔥 IMPORTANT: attach BOTH handlers
-    root_logger.handlers = [console_handler, file_handler]
+    root_logger.handlers = [console_handler]
 
     # Audit logger
     audit_logger = logging.getLogger("audit")
